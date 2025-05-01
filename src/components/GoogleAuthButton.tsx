@@ -99,7 +99,7 @@ const GoogleAuthButton: React.FC<GoogleAuthButtonProps> = ({
         });
         
         if (onSuccess) onSuccess();
-        router.push('/dashboard');
+        router.push('/pages/chats');
       }
     } catch (error) {
       console.error('Google auth failed:', error);

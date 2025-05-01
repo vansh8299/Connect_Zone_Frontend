@@ -1,16 +1,25 @@
-"use client"
+"use client";
 
-import { useRouter } from 'next/navigation';
-import { useState, useEffect } from 'react';
-import { motion } from 'framer-motion';
-import { FaUser, FaEdit, FaCheckCircle, FaEnvelope, FaLock, FaSignOutAlt, FaTimes } from 'react-icons/fa';
-import { useQuery, useMutation } from '@apollo/client';
-import { GET_USER_BY_ID } from '@/graphql/query/query';
-import { UPDATE_USER } from '@/graphql/query/query';
-import { UpdateUserInput, UpdateUserResponse } from '@/utils/type'
-import { getCookie } from 'cookies-next';
-import { extractUserIdFromToken } from '@/utils/extractidfromtoken';
-import { deleteCookie } from 'cookies-next';
+import { useRouter } from "next/navigation";
+import { useState, useEffect, useRef } from "react";
+import { motion } from "framer-motion";
+import {
+  FaUser,
+  FaEdit,
+  FaCheckCircle,
+  FaEnvelope,
+  FaLock,
+  FaSignOutAlt,
+  FaTimes,
+  FaCamera,
+} from "react-icons/fa";
+import { useQuery, useMutation } from "@apollo/client";
+import { GET_USER_BY_ID } from "@/graphql/query/query";
+import { UPDATE_USER } from "@/graphql/query/query";
+import { UpdateUserInput, UpdateUserResponse } from "@/utils/type";
+import { getCookie } from "cookies-next";
+import { extractUserIdFromToken } from "@/utils/extractidfromtoken";
+import { deleteCookie } from "cookies-next";
 
 interface User {
   id: string;
@@ -44,26 +53,29 @@ export default function ProfilePage() {
   const [isEditing, setIsEditing] = useState(false);
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
   const [passwordData, setPasswordData] = useState({
-    newPassword: '',
-    confirmPassword: ''
+    newPassword: "",
+    confirmPassword: "",
   });
-  const [passwordError, setPasswordError] = useState('');
+  const [passwordError, setPasswordError] = useState("");
   const [formData, setFormData] = useState<UserFormData>({
-    firstName: '',
-    lastName: '',
-    email: '',
-    about: '',
+    firstName: "",
+    lastName: "",
+    email: "",
+    about: "",
     isEmailVerified: false,
   });
+  const [avatarFile, setAvatarFile] = useState<File | null>(null);
+  const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Get token from cookies
-  const token = getCookie('token');
+  const token = getCookie("token");
   const userId = token ? extractUserIdFromToken(String(token)) : null;
 
   // Redirect to login if no token or user ID
   useEffect(() => {
     if (!token || !userId) {
-      router.push('/pages/login');
+      router.push("/pages/login");
     }
   }, [token, userId, router]);
 
@@ -75,119 +87,158 @@ export default function ProfilePage() {
 
   // Initialize update user mutation
   const [updateUser, { loading: updating, error: updateError }] = useMutation<
-    UpdateUserResponse, 
+    UpdateUserResponse,
     { input: UpdateUserInput }
   >(UPDATE_USER, {
     onCompleted: (data) => {
-      console.log('Profile updated successfully', data);
+      console.log("Profile updated successfully", data);
       setIsEditing(false);
+      // Reset avatar preview
+      setAvatarPreview(null);
+      setAvatarFile(null);
     },
     onError: (error) => {
-      console.error('Error updating profile:', error);
-    }
+      console.error("Error updating profile:", error);
+    },
   });
 
   // Update form data when user data is loaded
   useEffect(() => {
     if (data && data.user) {
       const userData = data.user;
-      console.log('User data:', userData);
+      console.log("User data:", userData);
       setFormData({
-        firstName: userData.firstName || '',
-        lastName: userData.lastName || '',
-        email: userData.email || '',
-        about: userData.about || '',
+        firstName: userData.firstName || "",
+        lastName: userData.lastName || "",
+        email: userData.email || "",
+        about: userData.about || "",
         isEmailVerified: userData.isEmailVerified || false,
       });
     }
   }, [data]);
 
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+  const handleInputChange = (
+    e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>
+  ) => {
     const { name, value } = e.target;
-    setFormData(prev => ({
+    setFormData((prev) => ({
       ...prev,
-      [name]: value
+      [name]: value,
     }));
   };
 
-  const handlePasswordInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handlePasswordInputChange = (
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
     const { name, value } = e.target;
-    setPasswordData(prev => ({
+    setPasswordData((prev) => ({
       ...prev,
-      [name]: value
+      [name]: value,
     }));
+  };
+
+  const handleAvatarClick = () => {
+    if (isEditing && fileInputRef.current) {
+      fileInputRef.current.click();
+    }
+  };
+
+  // In your ProfilePage component
+  const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      setAvatarFile(file);
+      // Create a preview URL
+      const previewUrl = URL.createObjectURL(file);
+      setAvatarPreview(previewUrl);
+    }
   };
 
   const handleSave = async () => {
     if (!userId) return;
-    
+
     try {
-      await updateUser({
-        variables: {
-          input: {
-            id: userId,
-            firstName: formData.firstName,
-            lastName: formData.lastName,
-            email: formData.email,
-            about: formData.about,
-          }
-        }
-      });
-      window.location.reload(); // Refresh the page to reflect changes
+      const variables: { input: UpdateUserInput } = {
+        input: {
+          id: userId,
+          firstName: formData.firstName,
+          lastName: formData.lastName,
+          email: formData.email,
+          about: formData.about,
+        },
+      };
+
+      // Include avatar as base64 if one was selected
+      if (avatarFile) {
+        // Convert file to base64
+        const reader = new FileReader();
+        reader.readAsDataURL(avatarFile);
+
+        reader.onload = async () => {
+          const base64 = reader.result as string;
+          variables.input.avatarBase64 = base64;
+
+          await updateUser({ variables });
+          // window.location.reload(); // Refresh the page to reflect changes
+        };
+      } else {
+        await updateUser({ variables });
+        // window.location.reload();
+      }
     } catch (error) {
-      console.error('Error saving profile:', error);
+      console.error("Error saving profile:", error);
     }
   };
 
   const handlePasswordUpdate = async () => {
-    setPasswordError('');
-    
+    setPasswordError("");
+
     if (!passwordData.newPassword || !passwordData.confirmPassword) {
-      setPasswordError('Both password fields are required');
+      setPasswordError("Both password fields are required");
       return;
     }
-    
+
     if (passwordData.newPassword !== passwordData.confirmPassword) {
-      setPasswordError('New password and confirmation do not match');
+      setPasswordError("New password and confirmation do not match");
       return;
     }
-    
+
     if (passwordData.newPassword.length < 8) {
-      setPasswordError('Password must be at least 8 characters');
+      setPasswordError("Password must be at least 8 characters");
       return;
     }
-    
+
     try {
       await updateUser({
         variables: {
           input: {
-            id: userId || '',
+            id: userId || "",
             password: passwordData.newPassword,
-          }
-        }
+          },
+        },
       });
-      
+
       // Reset form and close modal on success
-      setPasswordData({ newPassword: '', confirmPassword: '' });
+      setPasswordData({ newPassword: "", confirmPassword: "" });
       setIsPasswordModalOpen(false);
-      
+
       // Show success message (you can implement a toast notification here)
-      alert('Password updated successfully');
+      alert("Password updated successfully");
     } catch (error) {
-      console.error('Error updating password:', error);
+      console.error("Error updating password:", error);
       if (error instanceof Error) {
-        setPasswordError(error.message || 'Failed to update password');
+        setPasswordError(error.message || "Failed to update password");
       } else {
-        setPasswordError('Failed to update password');
+        setPasswordError("Failed to update password");
       }
     }
   };
 
   const handleLogout = () => {
     // Clear cookies and redirect
-    deleteCookie('token');
-    deleteCookie('user');
-    router.push('/pages/login');
+    deleteCookie("token");
+    deleteCookie("user");
+    router.push("/pages/login");
   };
 
   if (loading) {
@@ -202,10 +253,12 @@ export default function ProfilePage() {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-indigo-50 to-blue-100">
         <div className="bg-white p-6 rounded-lg shadow-lg">
-          <h2 className="text-xl font-bold text-red-600 mb-2">Error loading profile</h2>
+          <h2 className="text-xl font-bold text-red-600 mb-2">
+            Error loading profile
+          </h2>
           <p className="text-gray-700">{error.message}</p>
-          <button 
-            onClick={() => router.push('/login')}
+          <button
+            onClick={() => router.push("/login")}
             className="mt-4 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
           >
             Return to Login
@@ -218,6 +271,7 @@ export default function ProfilePage() {
   // Access the user data correctly through data.user
   const user = data?.user;
   const isGoogleUser = !!user?.googleId;
+  const displayAvatar = avatarPreview || user?.avatar;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-indigo-50 to-blue-100 py-8 px-4">
@@ -234,20 +288,40 @@ export default function ProfilePage() {
             <div className="flex justify-between items-start">
               <div className="flex items-end -mt-11">
                 <div className="relative">
-                  {user?.avatar ? (
-                    <img 
-                      src={user.avatar} 
-                      alt="Profile" 
-                      className="w-32 h-32 rounded-full border-4 border-white object-cover"
-                    />
-                  ) : (
-                    <div className="w-32 h-32 rounded-full border-4 border-white bg-indigo-100 flex items-center justify-center">
-                      <FaUser className="w-16 h-16 text-indigo-600" />
-                    </div>
-                  )}
+                  <div
+                    className={`w-32 h-32 rounded-full border-4 border-white overflow-hidden ${
+                      isEditing ? "cursor-pointer" : ""
+                    }`}
+                    onClick={handleAvatarClick}
+                  >
+                    {displayAvatar ? (
+                      <img
+                        src={displayAvatar}
+                        alt="Profile"
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <div className="w-full h-full bg-indigo-100 flex items-center justify-center">
+                        <FaUser className="w-16 h-16 text-indigo-600" />
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Hidden file input for avatar upload */}
+                  <input
+                    type="file"
+                    ref={fileInputRef}
+                    onChange={handleAvatarChange}
+                    accept="image/*"
+                    className="hidden"
+                  />
+
                   {isEditing && (
-                    <button className="absolute bottom-0 right-0 bg-indigo-600 text-white p-2 rounded-full">
-                      <FaEdit className="w-4 h-4" />
+                    <button
+                      className="absolute bottom-0 right-0 bg-indigo-600 text-white p-2 rounded-full"
+                      onClick={handleAvatarClick}
+                    >
+                      <FaCamera className="w-4 h-4" />
                     </button>
                   )}
                 </div>
@@ -262,23 +336,29 @@ export default function ProfilePage() {
                     />
                   ) : (
                     <h1 className="text-2xl font-bold text-gray-800">
-                      {user?.firstName || 'User'} {user?.lastName || ''}
+                      {user?.firstName || "User"} {user?.lastName || ""}
                     </h1>
                   )}
-                  <p className="text-gray-600">@{user?.googleId ? 'google-user' : 'user'}</p>
+                  <p className="text-gray-600">
+                    @{user?.googleId ? "google-user" : "user"}
+                  </p>
                 </div>
               </div>
               <div className="flex space-x-2 mt-4">
                 {isEditing ? (
                   <>
-                    <button 
-                      onClick={() => setIsEditing(false)}
+                    <button
+                      onClick={() => {
+                        setIsEditing(false);
+                        setAvatarPreview(null);
+                        setAvatarFile(null);
+                      }}
                       className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50"
                       disabled={updating}
                     >
                       Cancel
                     </button>
-                    <button 
+                    <button
                       onClick={handleSave}
                       className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 flex items-center"
                       disabled={updating}
@@ -296,7 +376,7 @@ export default function ProfilePage() {
                     </button>
                   </>
                 ) : (
-                  <button 
+                  <button
                     onClick={() => setIsEditing(true)}
                     className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 flex items-center"
                   >
@@ -308,6 +388,7 @@ export default function ProfilePage() {
           </div>
         </div>
 
+        {/* Rest of the component remains the same... */}
         {/* Profile Details */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {/* Personal Information */}
@@ -317,7 +398,9 @@ export default function ProfilePage() {
             </h2>
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-500">First Name</label>
+                <label className="block text-sm font-medium text-gray-500">
+                  First Name
+                </label>
                 {isEditing ? (
                   <input
                     type="text"
@@ -327,12 +410,16 @@ export default function ProfilePage() {
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
                   />
                 ) : (
-                  <p className="text-gray-800">{user?.firstName || 'Not provided'}</p>
+                  <p className="text-gray-800">
+                    {user?.firstName || "Not provided"}
+                  </p>
                 )}
               </div>
-              
+
               <div>
-                <label className="block text-sm font-medium text-gray-500">Last Name</label>
+                <label className="block text-sm font-medium text-gray-500">
+                  Last Name
+                </label>
                 {isEditing ? (
                   <input
                     type="text"
@@ -342,21 +429,28 @@ export default function ProfilePage() {
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
                   />
                 ) : (
-                  <p className="text-gray-800">{user?.lastName || 'Not provided'}</p>
+                  <p className="text-gray-800">
+                    {user?.lastName || "Not provided"}
+                  </p>
                 )}
               </div>
-              
+
               <div>
-                <label className="block text-sm font-medium text-gray-500">Email</label>
+                <label className="block text-sm font-medium text-gray-500">
+                  Email
+                </label>
                 <div className="flex items-center">
                   <div className="flex items-center text-gray-800">
-                    <FaEnvelope className="mr-2 text-indigo-600" /> {user?.email || 'Not provided'}
+                    <FaEnvelope className="mr-2 text-indigo-600" />{" "}
+                    {user?.email || "Not provided"}
                   </div>
                 </div>
               </div>
-              
+
               <div>
-                <label className="block text-sm font-medium text-gray-500">Status</label>
+                <label className="block text-sm font-medium text-gray-500">
+                  Status
+                </label>
                 <div className="flex items-center text-gray-800">
                   {user?.isEmailVerified ? (
                     <span className="text-green-500 flex items-center">
@@ -378,7 +472,7 @@ export default function ProfilePage() {
                 {updateError.message}
               </div>
             )}
-          
+
             {/* Bio */}
             <div className="bg-white rounded-2xl shadow-xl p-6">
               <h2 className="text-xl font-bold text-gray-800 mb-4">About</h2>
@@ -391,7 +485,7 @@ export default function ProfilePage() {
                   placeholder="Tell us about yourself..."
                 ></textarea>
               ) : (
-                <p className="text-gray-700">{formData.about || ''}</p>
+                <p className="text-gray-700">{formData.about || ""}</p>
               )}
             </div>
 
@@ -403,26 +497,27 @@ export default function ProfilePage() {
               <div className="space-y-3">
                 {isGoogleUser ? (
                   <div className="group relative">
-                    <button 
+                    <button
                       disabled
                       className="w-full text-left px-4 py-3 bg-gray-100 text-gray-500 rounded-lg cursor-not-allowed flex items-center"
                     >
                       <FaLock className="mr-2" /> Change Password
                     </button>
                     <div className="absolute left-0 bottom-full mb-2 w-64 bg-gray-800 text-white p-2 rounded text-sm invisible group-hover:visible">
-                      Google users cannot change their password. Please use Google to manage your account security.
+                      Google users cannot change their password. Please use
+                      Google to manage your account security.
                     </div>
                   </div>
                 ) : (
-                  <button 
+                  <button
                     onClick={() => setIsPasswordModalOpen(true)}
                     className="w-full text-left px-4 py-3 bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100 transition-colors flex items-center"
                   >
                     <FaLock className="mr-2" /> Change Password
                   </button>
                 )}
-             
-                <button 
+
+                <button
                   onClick={handleLogout}
                   className="w-full text-left px-4 py-3 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition-colors flex items-center"
                 >
@@ -439,21 +534,23 @@ export default function ProfilePage() {
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-md">
             <div className="flex justify-between items-center mb-4">
-              <h3 className="text-xl font-bold text-gray-800">Change Password</h3>
-              <button 
+              <h3 className="text-xl font-bold text-gray-800">
+                Change Password
+              </h3>
+              <button
                 onClick={() => setIsPasswordModalOpen(false)}
                 className="text-gray-500 hover:text-gray-700"
               >
                 <FaTimes />
               </button>
             </div>
-            
+
             {passwordError && (
               <div className="bg-red-50 text-red-600 p-3 rounded mb-4">
                 {passwordError}
               </div>
             )}
-            
+
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -468,7 +565,7 @@ export default function ProfilePage() {
                   placeholder="Enter new password"
                 />
               </div>
-              
+
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
                   Confirm New Password
@@ -483,7 +580,7 @@ export default function ProfilePage() {
                 />
               </div>
             </div>
-            
+
             <div className="flex justify-end mt-6 space-x-3">
               <button
                 onClick={() => setIsPasswordModalOpen(false)}

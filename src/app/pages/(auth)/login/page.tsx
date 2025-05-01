@@ -1,35 +1,38 @@
-"use client"
+"use client";
 
-import { useState } from 'react';
-import { useFormik } from 'formik';
-import * as Yup from 'yup';
-import { motion } from 'framer-motion';
-import { EnvelopeIcon, LockClosedIcon, EyeIcon, EyeSlashIcon, ArrowPathIcon } from '@heroicons/react/24/outline';
-import { useRouter } from 'next/navigation';
-import { useMutation } from '@apollo/client';
-import { LOGIN_MUTATION } from '@/graphql/query/query';
-import { setCookie } from 'cookies-next';
-import GoogleAuthButton from '@/components/GoogleAuthButton';
+import { useState } from "react";
+import { useFormik } from "formik";
+import * as Yup from "yup";
+import { motion } from "framer-motion";
+import {
+  EnvelopeIcon,
+  LockClosedIcon,
+  EyeIcon,
+  EyeSlashIcon,
+  ArrowPathIcon,
+} from "@heroicons/react/24/outline";
+import { useRouter } from "next/navigation";
+import { useMutation } from "@apollo/client";
+import { LOGIN_MUTATION } from "@/graphql/query/query";
+import { setCookie } from "cookies-next";
+import GoogleAuthButton from "@/components/GoogleAuthButton";
 
 export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const router = useRouter();
-  
+
   const [login] = useMutation(LOGIN_MUTATION);
 
   const formik = useFormik({
     initialValues: {
-      email: '',
-      password: '',
+      email: "",
+      password: "",
     },
     validationSchema: Yup.object({
-      email: Yup.string()
-        .email('Invalid email address')
-        .required('Required'),
-      password: Yup.string()
-        .required('Required'),
+      email: Yup.string().email("Invalid email address").required("Required"),
+      password: Yup.string().required("Required"),
     }),
     onSubmit: async (values) => {
       setIsSubmitting(true);
@@ -43,29 +46,29 @@ export default function LoginPage() {
             },
           },
         });
-        
+
         if (data?.login) {
           // Set HTTP-only cookie (server-side)
-          setCookie('token', data.login.token, {
+          setCookie("token", data.login.token, {
             maxAge: 60 * 60 * 24 * 7, // 1 week
-            secure: process.env.NODE_ENV === 'production',
-            sameSite: 'strict',
-            path: '/',
+            secure: process.env.NODE_ENV === "production",
+            sameSite: "strict",
+            path: "/",
           });
-        
+
           // Client-accessible user data
-          setCookie('user', JSON.stringify(data.login.user), {
+          setCookie("user", JSON.stringify(data.login.user), {
             maxAge: 60 * 60 * 24 * 7, // 1 week
-            secure: process.env.NODE_ENV === 'production',
-            sameSite: 'strict',
-            path: '/',
+            secure: process.env.NODE_ENV === "production",
+            sameSite: "strict",
+            path: "/",
           });
-        
-          router.push('/dashboard');
+
+          router.push("/pages/chats");
         }
       } catch (error: any) {
-        console.error('Login failed:', error);
-        setErrorMessage(error.message || 'Login failed. Please try again.');
+        console.error("Login failed:", error);
+        setErrorMessage(error.message || "Login failed. Please try again.");
       } finally {
         setIsSubmitting(false);
       }
@@ -75,7 +78,6 @@ export default function LoginPage() {
   const handleGoogleError = (error: Error) => {
     setErrorMessage(`Google login failed: ${error.message}`);
   };
-
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-indigo-50 to-blue-100 flex items-start justify-center pt-20 p-4">
@@ -96,8 +98,16 @@ export default function LoginPage() {
               <div className="bg-red-50 border-l-4 border-red-500 p-4">
                 <div className="flex">
                   <div className="flex-shrink-0">
-                    <svg className="h-5 w-5 text-red-500" viewBox="0 0 20 20" fill="currentColor">
-                      <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                    <svg
+                      className="h-5 w-5 text-red-500"
+                      viewBox="0 0 20 20"
+                      fill="currentColor"
+                    >
+                      <path
+                        fillRule="evenodd"
+                        d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z"
+                        clipRule="evenodd"
+                      />
                     </svg>
                   </div>
                   <div className="ml-3">
@@ -108,7 +118,10 @@ export default function LoginPage() {
             )}
 
             <div>
-              <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1">
+              <label
+                htmlFor="email"
+                className="block text-sm font-medium text-gray-700 mb-1"
+              >
                 Email Address
               </label>
               <div className="relative">
@@ -122,17 +135,22 @@ export default function LoginPage() {
                   onChange={formik.handleChange}
                   onBlur={formik.handleBlur}
                   value={formik.values.email}
-                  className="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
+                  className="block w-full pl-10 pr-3 py-2 border text-black border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
                   placeholder="you@example.com"
                 />
               </div>
               {formik.touched.email && formik.errors.email && (
-                <p className="mt-1 text-sm text-red-600">{formik.errors.email}</p>
+                <p className="mt-1 text-sm text-red-600">
+                  {formik.errors.email}
+                </p>
               )}
             </div>
 
             <div>
-              <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-1">
+              <label
+                htmlFor="password"
+                className="block text-sm font-medium text-gray-700 mb-1"
+              >
                 Password
               </label>
               <div className="relative">
@@ -146,7 +164,7 @@ export default function LoginPage() {
                   onChange={formik.handleChange}
                   onBlur={formik.handleBlur}
                   value={formik.values.password}
-                  className="block w-full pl-10 pr-10 py-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
+                  className="block w-full pl-10 pr-10 py-2 text-black border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
                   placeholder="••••••••"
                 />
                 <button
@@ -162,7 +180,9 @@ export default function LoginPage() {
                 </button>
               </div>
               {formik.touched.password && formik.errors.password && (
-                <p className="mt-1 text-sm text-red-600">{formik.errors.password}</p>
+                <p className="mt-1 text-sm text-red-600">
+                  {formik.errors.password}
+                </p>
               )}
             </div>
 
@@ -174,13 +194,19 @@ export default function LoginPage() {
                   type="checkbox"
                   className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
                 />
-                <label htmlFor="remember-me" className="ml-2 block text-sm text-gray-700">
+                <label
+                  htmlFor="remember-me"
+                  className="ml-2 block text-sm text-gray-700"
+                >
                   Remember me
                 </label>
               </div>
 
               <div className="text-sm">
-                <a href="/forgot-password" className="font-medium text-indigo-600 hover:text-indigo-500">
+                <a
+                  href="/pages/forgetpassword"
+                  className="font-medium text-indigo-600 hover:text-indigo-500"
+                >
                   Forgot password?
                 </a>
               </div>
@@ -198,31 +224,34 @@ export default function LoginPage() {
                     Signing in...
                   </>
                 ) : (
-                  'Sign In'
+                  "Sign In"
                 )}
               </button>
             </div>
           </form>
           <div className="mt-3">
-          <div className="relative">
-            <div className="absolute inset-0 flex items-center">
-              <div className="w-full border-t border-gray-300"></div>
+            <div className="relative">
+              <div className="absolute inset-0 flex items-center">
+                <div className="w-full border-t border-gray-300"></div>
+              </div>
+              <div className="relative flex justify-center text-sm">
+                <span className="px-2 bg-gray-50 text-gray-500">
+                  Or continue with
+                </span>
+              </div>
             </div>
-            <div className="relative flex justify-center text-sm">
-              <span className="px-2 bg-gray-50 text-gray-500">
-                Or continue with
-              </span>
-            </div>
-          </div>
 
-          <div className="mt-2">
-            <GoogleAuthButton onError={handleGoogleError} />
+            <div className="mt-2">
+              <GoogleAuthButton onError={handleGoogleError} />
+            </div>
           </div>
-        </div>
           <div className="px-8 pb-6 text-center mt-2">
             <p className="text-sm text-gray-600">
-              Don't have an account?{' '}
-              <a href="/pages/signup" className="font-medium text-indigo-600 hover:text-indigo-500">
+              Don't have an account?{" "}
+              <a
+                href="/pages/signup"
+                className="font-medium text-indigo-600 hover:text-indigo-500"
+              >
                 Sign up
               </a>
             </p>

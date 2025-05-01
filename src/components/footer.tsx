@@ -26,7 +26,7 @@ const Footer = () => {
     <nav className="fixed bottom-0 w-full bg-white border-t border-gray-200">
       <div className="flex justify-around py-3">
         {/* Chats Button */}
-        <Link href="/">
+        <Link href="/pages/chats">
           <button className="flex flex-col items-center text-gray-600 hover:text-green-600 transition-colors">
             <span className="w-6 h-6 mb-1">
               <FaFacebookMessenger />

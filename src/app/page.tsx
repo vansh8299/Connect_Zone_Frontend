@@ -52,7 +52,7 @@ export default function HomePage() {
           <div className="flex justify-center space-x-4">
             {token ? (
               <button
-                onClick={() => router.push('/dashboard')}
+                onClick={() => router.push('/pages/chats')}
                 className="px-8 py-3 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 transition-colors shadow-lg"
               >
                 Go to Dashboard

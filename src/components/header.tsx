@@ -11,13 +11,14 @@ export default function Header() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const pathname = usePathname();
   const [hasToken, setHasToken] = useState(false);
-const router = useRouter()
+  const router = useRouter();
+  
   const logout = () => {
     deleteCookie('token');
     deleteCookie('user');
     setHasToken(false);
-    router.push('/pages/login')
-  }
+    router.push('/pages/login');
+  };
 
   useEffect(() => {
     // Check for token when component mounts
@@ -58,8 +59,11 @@ const router = useRouter()
             </Link>
           </div>
 
-          {/* Auth Buttons */}
-          <div className="hidden md:flex items-center space-x-4">
+          {/* Spacer to push auth buttons to the right */}
+          <div className="flex-grow"></div>
+          
+          {/* Auth Buttons - now with ml-auto to push to the right */}
+          <div className="hidden md:flex items-center space-x-4 ml-auto">
             {hasToken ? (
               <button 
                 onClick={logout}

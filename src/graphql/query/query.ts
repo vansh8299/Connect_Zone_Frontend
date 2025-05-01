@@ -27,6 +27,7 @@ export const SIGNUP_MUTATION = gql`
         firstName
         lastName
         email
+        avatar
       }
     }
   }
@@ -75,7 +76,21 @@ export const GET_USER_BY_ID = gql`
     }
   }
 `;
-
+export const GET_USER = gql`
+  query GetUser {
+    users {
+      id
+      firstName
+      lastName
+      email
+      password
+      googleId
+      about
+      avatar
+      isEmailVerified
+    }
+  }
+`;
 export const UPDATE_USER = gql`
   mutation UpdateUser($input: UpdateUserInput!) {
     updateUser(input: $input) {
@@ -87,6 +102,14 @@ export const UPDATE_USER = gql`
       about
       isEmailVerified
       avatar
+    }
+  }
+`;
+export const UPDATE_PASSWORD_MUTATION = gql`
+  mutation UpdatePassword($input: UpdatePasswordInput!) {
+    updatePassword(input: $input) {
+      success
+      message
     }
   }
 `;
