@@ -1,13 +1,22 @@
-"use client"
+// src/app/chat/page.tsx
+'use client';
 
-import { useState, useEffect, useRef } from 'react';
-import { FaEllipsisV, FaPhone, FaVideo, FaSmile, FaPaperclip, FaPaperPlane, FaInfoCircle, FaCheckCircle, FaTimes } from 'react-icons/fa';
-import Image from 'next/image';
+import { useState, useEffect, useRef, useMemo } from 'react';
+import { useQuery, useMutation, useLazyQuery, useApolloClient } from '@apollo/client';
 import { getCookie } from 'cookies-next';
-import { CREATE_CONVERSATION, GET_CONVERSATIONS, GET_MESSAGES, GET_USER_BY_EMAIL, MESSAGE_SENT_SUBSCRIPTION, NEW_MESSAGE_SUBSCRIPTION, SEARCH_USERS, SEND_MESSAGE } from '@/graphql/query/chatquery';
-import { useApolloClient, useLazyQuery, useMutation, useQuery, useSubscription } from '@apollo/client';
-import { GET_USER, GET_USER_BY_ID } from '@/graphql/query/query';
-import { extractUserIdFromToken } from "@/utils/extractidfromtoken";
+import { 
+  GET_CONVERSATIONS, 
+  GET_MESSAGES, 
+  SEND_MESSAGE, 
+  CREATE_CONVERSATION, 
+  GET_USER_BY_EMAIL, 
+  SEARCH_USERS,
+ 
+} from '@/graphql/query/chatquery';
+import { GET_USER_BY_ID } from '@/graphql/query/query';
+import { FaPaperclip, FaSmile, FaPaperPlane, FaPhone, FaVideo, FaInfoCircle, FaEllipsisV, FaCheckCircle, FaTimes } from 'react-icons/fa';
+import { useSocket } from '@/utils/SocketContext';
+
 export default function ChatPage() {
   // State
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
@@ -17,14 +26,19 @@ export default function ChatPage() {
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [otherParticipantDetails, setOtherParticipantDetails] = useState<any>(null);
   const [showUserDetails, setShowUserDetails] = useState(false);
+  const [receivedMessages, setReceivedMessages] = useState<any[]>([]); // Track new messages
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const prevConversationId = useRef<string | null>(null);
+  
+  // Hooks
   const client = useApolloClient();
+  const { socket, isConnected } = useSocket();
   
   // Get token and extract user ID
   const token = getCookie('token');
   const currentUserId = token ? extractUserIdFromToken(String(token)) : 'guest-user';
 
-  // Fetch conversations
+  // Fetch conversations query
   const { data: conversationsData, loading: conversationsLoading } = useQuery(GET_CONVERSATIONS, {
     onCompleted: (data: { getConversations: any[] }) => {
       if (data?.getConversations?.length > 0 && !activeConversationId) {
@@ -43,11 +57,46 @@ export default function ChatPage() {
     }
   });
 
+  // Format timestamp helper
+  const formatTimestamp = (timestamp: string | number | Date) => {
+    if (!timestamp) return '';
+    
+    let date;
+    
+    // Check if timestamp is a number (Unix timestamp in milliseconds)
+    if (!isNaN(Number(timestamp))) {
+      date = new Date(Number(timestamp));
+    } 
+    // Check if timestamp is already a Date object
+    else if (timestamp instanceof Date) {
+      date = timestamp;
+    }
+    // Otherwise assume it's an ISO string
+    else {
+      try {
+        date = new Date(timestamp);
+      } catch (error) {
+        console.error('Invalid timestamp format:', timestamp);
+        return '';
+      }
+    }
+    
+    // Check if date is valid
+    if (isNaN(date.getTime())) {
+      console.error('Invalid date created from timestamp:', timestamp);
+      return '';
+    }
+    
+    return date.toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  };
+  
   // Get user by ID query
   const [getUserById, { loading: userDetailsLoading }] = useLazyQuery(GET_USER_BY_ID, {
     onCompleted: (data) => {
       if (data?.user) {
-        console.log('User details:', data.user);
         setOtherParticipantDetails(data.user);
       }
     },
@@ -57,9 +106,10 @@ export default function ChatPage() {
   });
 
   // Fetch messages for active conversation
-  const { data: messagesData, loading: messagesLoading, subscribeToMore } = useQuery(GET_MESSAGES, {
+  const { data: messagesData, loading: messagesLoading, refetch: refetchMessages } = useQuery(GET_MESSAGES, {
     variables: { conversationId: activeConversationId },
-    skip: !activeConversationId
+    skip: !activeConversationId,
+    fetchPolicy: 'network-only'
   });
 
   // Search users query
@@ -152,102 +202,275 @@ export default function ChatPage() {
     }
   }, [activeConversationId, conversationsData, currentUserId]);
 
-  // Subscribe to new messages in active conversation
+  // FIX 1: Improved socket message handling with better logging
   useEffect(() => {
-    if (!activeConversationId) return;
-
-    const unsubscribe = subscribeToMore({
-      document: MESSAGE_SENT_SUBSCRIPTION,
-      variables: { conversationId: activeConversationId },
-      updateQuery: (prev: { getMessages: any[] }, { subscriptionData }: any) => {
-        if (!subscriptionData.data) return prev;
-        const newMessage = subscriptionData.data.messageSent;
-        
-        return {
-          getMessages: [...prev.getMessages, newMessage]
-        };
-      }
-    });
-
-    return () => unsubscribe();
-  }, [activeConversationId, subscribeToMore]);
-
-  // Subscribe to new messages in other conversations
-  useSubscription(NEW_MESSAGE_SUBSCRIPTION, {
-    onData: ({ data }) => {
-      const newMessage = data.data?.newMessage;
-      if (!newMessage) return;
+    if (!socket) return;
       
-      // Update the cache for the conversation this message belongs to
-      client.cache.updateQuery(
-        { query: GET_MESSAGES, variables: { conversationId: newMessage.conversationId } },
-        (existingMessages: any) => {
-          if (!existingMessages) return { getMessages: [newMessage] };
-          return { getMessages: [...existingMessages.getMessages, newMessage] };
-        }
-      );
-      
-      // Also update the conversations list to show latest message
-      client.cache.updateQuery(
-        { query: GET_CONVERSATIONS },
-        (existingConversations: any) => {
-          if (!existingConversations) return { getConversations: [] };
+    const handleNewMessage = (data: { type: string; payload: any }) => {
+      console.log("Socket received message:", data);
           
-          return {
-            getConversations: existingConversations.getConversations.map((conv: any) => {
-              if (conv.id === newMessage.conversationId) {
-                return {
-                  ...conv,
-                  messages: [newMessage]
-                };
-              }
-              return conv;
-            })
-          };
+      if (data.type === 'NEW_MESSAGE') {
+        const newMessage = data.payload;
+              
+        if (!newMessage || !newMessage.conversationId) {
+          console.error("Received invalid message format:", newMessage);
+          return;
         }
+              
+        console.log(`Processing new message for conversation: ${newMessage.conversationId}`);
+        
+        // FIX 2: Check if the message belongs to the active conversation
+        // If so, update the UI immediately
+        if (newMessage.conversationId === activeConversationId) {
+          console.log("Message is for active conversation, updating UI immediately");
+          
+          // Update Apollo cache directly for the active conversation
+          try {
+            const existingMessages = client.readQuery({
+              query: GET_MESSAGES,
+              variables: { conversationId: activeConversationId }
+            })?.getMessages || [];
+            
+            // Check if we already have this message to prevent duplicates
+            if (!existingMessages.some((msg: any) => msg.id === newMessage.id)) {
+              client.writeQuery({
+                query: GET_MESSAGES,
+                variables: { conversationId: activeConversationId },
+                data: {
+                  getMessages: [...existingMessages, newMessage]
+                }
+              });
+              
+              // Scroll to bottom on new message
+              setTimeout(() => {
+                messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+              }, 100);
+            }
+          } catch (err) {
+            console.error("Error updating cache with new message:", err);
+          }
+        }
+              
+        // Add new message to our local state for any conversation
+        setReceivedMessages(prev => {
+          // Check if we already have this message to prevent duplicates
+          if (prev.some(msg => msg.id === newMessage.id)) {
+            return prev;
+          }
+          return [...prev, newMessage];
+        });
+              
+        // Update conversations list to show the conversation with newest message at top
+        client.refetchQueries({
+          include: [GET_CONVERSATIONS]
+        });
+      }
+    };
+      
+    // FIX 3: Make sure we're properly listening to the 'message' event
+    socket.off('message'); // Remove any existing listeners to prevent duplicates
+    socket.on('message', handleNewMessage);
+      
+    return () => {
+      socket.off('message', handleNewMessage);
+    };
+  }, [socket, client, activeConversationId]);
+  
+  // FIX 4: Simplified handling of received messages by using a debounce
+  useEffect(() => {
+    if (receivedMessages.length === 0) return;
+    
+    const timer = setTimeout(() => {
+      // Process only the messages for non-active conversations
+      // (active conversation messages are handled immediately in the socket handler)
+      const messagesForOtherConversations = receivedMessages.filter(
+        msg => msg.conversationId !== activeConversationId
       );
+      
+      if (messagesForOtherConversations.length > 0) {
+        console.log(`Processing ${messagesForOtherConversations.length} messages for other conversations`);
+      }
+      
+      // Clear all processed messages
+      setReceivedMessages([]);
+    }, 300);
+    
+    return () => clearTimeout(timer);
+  }, [receivedMessages, activeConversationId]);
+
+  // FIX 5: Improved socket room management
+  useEffect(() => {
+    if (!socket || !isConnected) return;
+    
+    if (!activeConversationId) return;
+    
+    console.log(`Attempting to join conversation room: ${activeConversationId}`);
+    
+    // Leave previous conversation if any
+    if (prevConversationId.current && prevConversationId.current !== activeConversationId) {
+      console.log(`Leaving previous conversation room: ${prevConversationId.current}`);
+      socket.emit('leaveConversation', prevConversationId.current);
     }
-  });
+    
+    // Join new conversation
+    socket.emit('joinConversation', activeConversationId);
+    console.log(`Joined conversation room: ${activeConversationId}`);
+    
+    // Update ref for next change
+    prevConversationId.current = activeConversationId;
+    
+    // Cleanup on unmount
+    return () => {
+      if (activeConversationId) {
+        console.log(`Leaving conversation room on cleanup: ${activeConversationId}`);
+        socket.emit('leaveConversation', activeConversationId);
+      }
+    };
+  }, [socket, isConnected, activeConversationId]);
+
+  // Handle reconnection
+  useEffect(() => {
+    if (!socket) return;
+
+    const handleReconnect = () => {
+      console.log("Socket reconnected, rejoining active conversation");
+      if (activeConversationId) {
+        socket.emit('joinConversation', activeConversationId);
+        // Refetch messages to sync after reconnect
+        refetchMessages();
+      }
+    };
+
+    socket.on('reconnect', handleReconnect);
+    socket.on('connect', handleReconnect);
+
+    return () => {
+      socket.off('reconnect', handleReconnect);
+      socket.off('connect', handleReconnect);
+    };
+  }, [socket, activeConversationId, refetchMessages]);
 
   // Scroll to bottom when messages change
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messagesData]);
+  }, [messagesData?.getMessages?.length]);
 
-  // Handle message sending
+  // Improved message sending with proper error handling
   const handleSendMessage = async () => {
     if (!message.trim() || !activeConversationId) return;
     
+    const messageContent = message.trim();
+    const optimisticId = `temp-${Date.now()}`;
+    const timestamp = new Date().toISOString();
+    
+    // Clear input immediately for better UX
+    setMessage('');
+    
+    // Create optimistic message
+    const optimisticMessage = {
+      __typename: 'Message',
+      id: optimisticId,
+      content: messageContent,
+      sender: {
+        __typename: 'User',
+        id: currentUserId,
+        firstName: 'You',
+        lastName: '',
+        avatar: ''
+      },
+      readBy: [{
+        __typename: 'MessageRead',
+        id: `read-${optimisticId}`,
+        user: {
+          __typename: 'User',
+          id: currentUserId,
+          firstName: 'You',
+          lastName: '',
+          avatar: ''
+        },
+        readAt: timestamp
+      }],
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      type: 'TEXT',
+      conversationId: activeConversationId
+    };
+    
+    // Get current messages from cache
+    const currentMessages = client.readQuery({
+      query: GET_MESSAGES,
+      variables: { conversationId: activeConversationId }
+    })?.getMessages || [];
+    
+    // Update cache with optimistic message
+    client.writeQuery({
+      query: GET_MESSAGES,
+      variables: { conversationId: activeConversationId },
+      data: {
+        getMessages: [...currentMessages, optimisticMessage]
+      }
+    });
+    
     try {
-      await sendMessage({
+      // Send via mutation
+      const response = await sendMessage({
         variables: {
           input: {
             conversationId: activeConversationId,
-            content: message
-          }
-        },
-        optimisticResponse: {
-          sendMessage: {
-            __typename: 'Message',
-            id: 'temp-id',
-            content: message,
-            sender: {
-              __typename: 'User',
-              id: currentUserId,
-              firstName: 'You',
-              lastName: '',
-              avatar: ''
-            },
-            readBy: [],
-            createdAt: new Date().toISOString(),
-            type: 'TEXT'
+            content: messageContent
           }
         }
       });
       
-      setMessage('');
+      // FIX 6: Improved socket message sending with detailed logging
+      if (socket && isConnected) {
+        // Get participant IDs
+        const participants = conversationsData?.getConversations
+          .find((c: any) => c.id === activeConversationId)?.participants || [];
+        
+        const receiverIds = participants
+          .filter((p: any) => p.user.id !== currentUserId)
+          .map((p: any) => p.user.id);
+        
+        // Send via socket with more complete data
+        const messageToSend = {
+          ...response.data.sendMessage,
+          receivers: receiverIds,
+          conversationId: activeConversationId  // Explicitly include conversationId
+        };
+        
+        console.log("Emitting message via socket:", messageToSend);
+        socket.emit('message', messageToSend);
+      }
+      
+      // Remove optimistic message and add real message
+      const actualMessage = response.data.sendMessage;
+      
+      // Update cache with the real message
+      client.writeQuery({
+        query: GET_MESSAGES,
+        variables: { conversationId: activeConversationId },
+        data: {
+          getMessages: [
+            ...currentMessages.filter((msg: any) => msg.id !== optimisticId),
+            actualMessage
+          ]
+        }
+      });
+      
     } catch (error) {
       console.error('Error sending message:', error);
+      
+      // Remove optimistic message on error
+      client.writeQuery({
+        query: GET_MESSAGES,
+        variables: { conversationId: activeConversationId },
+        data: {
+          getMessages: currentMessages.filter((msg: any) => msg.id !== optimisticId)
+        }
+      });
+      
+      alert('Failed to send message. Please try again.');
     }
   };
 
@@ -284,9 +507,7 @@ export default function ChatPage() {
     try {
       await createConversation({
         variables: {
-          participantIds: [userId],
-          isGroup: false,
-          initialMessage: "Hi there!"
+          participantIds: [userId]
         }
       });
     } catch (error) {
@@ -323,7 +544,20 @@ export default function ChatPage() {
     return otherParticipant?.user?.avatar || '/globe.svg';
   };
 
-  // Complete implementation of renderParticipantDetails
+  // Extract user ID from JWT token
+  function extractUserIdFromToken(token: string): string | null {
+    try {
+      const base64Url = token.split('.')[1];
+      const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+      const payload = JSON.parse(atob(base64));
+      return payload.userId || null;
+    } catch (error) {
+      console.error('Error extracting user ID from token:', error);
+      return null;
+    }
+  }
+
+  // Render participant details
   const renderParticipantDetails = () => {
     if (userDetailsLoading) return (
       <div className="flex justify-center items-center h-full p-6">
@@ -405,11 +639,68 @@ export default function ChatPage() {
     );
   };
 
+  // FIX 7: Debug function to check socket connection
+  const checkSocketConnection = () => {
+    if (!socket) {
+      console.log("Socket not initialized");
+      return;
+    }
+    
+    console.log("Socket ID:", socket.id);
+    console.log("Socket connected:", isConnected);
+    console.log("Socket connected:", socket.connected);
+    
+    // Ping server to verify connection
+    socket.emit("ping");
+  };
+
   // Get the current active conversation data
   const activeConversation = activeConversationId && conversationsData?.getConversations 
     ? conversationsData.getConversations.find((c: any) => c.id === activeConversationId)
     : null;
 
+  // FIX 8: More efficient message merging with proper sorting
+  const allMessages = useMemo(() => {
+    const serverMessages = messagesData?.getMessages || [];
+    
+    // Filter new messages for current conversation
+    const newMessages = receivedMessages.filter(
+      msg => msg.conversationId === activeConversationId
+    );
+    
+    // Combine and deduplicate messages
+    const messagesMap = new Map();
+    
+    // First add server messages to the map
+    serverMessages.forEach((msg: { id: any; }) => {
+      messagesMap.set(msg.id, msg);
+    });
+    
+    // Then add new messages, overwriting if already exists
+    newMessages.forEach(msg => {
+      messagesMap.set(msg.id, msg);
+    });
+    
+    // Convert map to array and sort by creation time
+    return Array.from(messagesMap.values()).sort((a, b) => 
+      new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+    );
+  }, [messagesData?.getMessages, receivedMessages, activeConversationId]);
+
+  // FIX 9: Debug button to check socket connection (for development only)
+  // You can add this button somewhere in your UI for debugging
+  const renderDebugButton = () => {
+    if (process.env.NODE_ENV !== 'development') return null;
+    
+    return (
+      <button 
+        onClick={checkSocketConnection}
+        className="text-xs text-gray-500 hover:text-gray-700 mt-2"
+      >
+        Check Socket
+      </button>
+    );
+  };
   return (
     <div className="flex h-[calc(100vh-128px)] bg-gray-100">
       {/* Left Sidebar - Conversation List */}
@@ -509,11 +800,7 @@ export default function ChatPage() {
                         {otherParticipant ? `${otherParticipant.user.firstName} ${otherParticipant.user.lastName}` : 'Unknown'}
                       </h3>
                       <span className="text-xs text-gray-500">
-                        {conversation.messages[0]?.createdAt ? 
-                          new Date(conversation.messages[0]?.createdAt).toLocaleTimeString([], {
-                            hour: '2-digit',
-                            minute: '2-digit'
-                          }) : ''}
+                        {formatTimestamp(conversation.messages[0]?.createdAt)}
                       </span>
                     </div>
                     <div className="flex justify-between items-center">
@@ -615,15 +902,12 @@ export default function ChatPage() {
                     >
                       <p>{msg.content}</p>
                       <p className={`text-xs mt-1 ${
-                        msg.sender.id === currentUserId 
-                          ? 'text-indigo-200' 
-                          : 'text-gray-500'
-                      }`}>
-                        {new Date(msg.createdAt).toLocaleTimeString([], {
-                          hour: '2-digit',
-                          minute: '2-digit'
-                        })}
-                      </p>
+  msg.sender.id === currentUserId 
+    ? 'text-indigo-200' 
+    : 'text-gray-500'
+}`}>
+  {formatTimestamp(msg.createdAt)}
+</p>
                     </div>
                   </div>
                 ))}
