@@ -32,6 +32,7 @@ export const SocketProvider: React.FC<SocketProviderProps> = ({ children }) => {
   const [socket, setSocket] = useState<Socket | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [activeRooms, setActiveRooms] = useState<Set<string>>(new Set());
+  const [connectionAttempts, setConnectionAttempts] = useState(0);
 
   // Initialize socket connection
   useEffect(() => {
@@ -41,27 +42,28 @@ export const SocketProvider: React.FC<SocketProviderProps> = ({ children }) => {
       return;
     }
 
-    // FIXED: Use a consistent socket URL and port
-    // Get the socket URL from environment or use default
-    const socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:4000';
+    // IMPORTANT: Use the correct socket URL with port 4001
+    // This should match your server configuration
+    const socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:4001';
     
-    console.log('Connecting to socket at:', socketUrl);
+    console.log('Attempting socket connection to:', socketUrl);
 
     // Create socket instance with authentication
     const socketInstance = io(socketUrl, {
-      auth: { token }, // Simplified token passing
+      auth: { token },
       withCredentials: true,
-      transports: ['websocket', 'polling'],
+      transports: ['websocket', 'polling'], // Try websocket first, fall back to polling
       reconnection: true,
-      reconnectionAttempts: 5,
+      reconnectionAttempts: 10,
       reconnectionDelay: 1000,
       timeout: 20000
     });
 
     // Connection event handlers
     socketInstance.on('connect', () => {
-      console.log('Socket connected successfully:', socketInstance.id);
+      console.log('✅ Socket connected successfully with ID:', socketInstance.id);
       setIsConnected(true);
+      setConnectionAttempts(0);
       
       // Rejoin any active rooms on reconnect
       activeRooms.forEach(roomId => {
@@ -71,28 +73,43 @@ export const SocketProvider: React.FC<SocketProviderProps> = ({ children }) => {
     });
 
     socketInstance.on('connect_error', (err) => {
-      console.error('Socket connection error:', err.message);
+      const attempts = connectionAttempts + 1;
+      setConnectionAttempts(attempts);
+      console.error(`❌ Socket connection error (attempt ${attempts}):`, err.message);
       setIsConnected(false);
+      
+      // After multiple failed attempts, log more debug info
+      if (attempts >= 3) {
+        console.warn('Connection troubleshooting info:', {
+          url: socketUrl,
+          token: token ? '✓ Present' : '✗ Missing',
+          transports: ['websocket', 'polling']
+        });
+      }
     });
 
     socketInstance.on('disconnect', (reason) => {
-      console.log('Socket disconnected:', reason);
+      console.log('🔌 Socket disconnected:', reason);
       setIsConnected(false);
     });
 
     socketInstance.on('error', (error) => {
-      console.error('Socket error:', error);
+      console.error('🛑 Socket error:', error);
     });
 
     // Debug event - listen for ANY message
     socketInstance.onAny((event, ...args) => {
-      console.log(`DEBUG Socket Event [${event}]:`, args);
+      console.log(`📡 Socket Event [${event}]:`, args);
     });
 
     // Test ping/pong
-    socketInstance.emit('ping');
+    socketInstance.on('connect', () => {
+      console.log('Sending ping test...');
+      socketInstance.emit('ping');
+    });
+    
     socketInstance.on('pong', (data) => {
-      console.log('Received pong from server:', data);
+      console.log('✓ Received pong from server:', data);
     });
 
     setSocket(socketInstance);
@@ -102,7 +119,7 @@ export const SocketProvider: React.FC<SocketProviderProps> = ({ children }) => {
       console.log('Cleaning up socket connection');
       socketInstance.disconnect();
     };
-  }, []);
+  }, [connectionAttempts]);
 
   // Send message helper
   const sendMessage = useCallback((data: any) => {
@@ -118,7 +135,6 @@ export const SocketProvider: React.FC<SocketProviderProps> = ({ children }) => {
     
     try {
       console.log('Sending message via socket:', data);
-      // FIXED: Standardize the message format
       socket.emit('message', {
         type: 'NEW_MESSAGE',
         payload: data
@@ -167,7 +183,16 @@ export const SocketProvider: React.FC<SocketProviderProps> = ({ children }) => {
       console.error('Error leaving conversation:', error);
     }
   }, [socket]);
-console.log(socket, isConnected, activeRooms);
+
+  // For development debugging
+  useEffect(() => {
+    console.log('Socket Provider State:', { 
+      socketInstance: socket?.id || 'Not connected',
+      connected: isConnected, 
+      activeRooms: Array.from(activeRooms) 
+    });
+  }, [socket, isConnected, activeRooms]);
+
   const value = {
     socket,
     isConnected,
