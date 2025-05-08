@@ -14,9 +14,9 @@ import {
  
 } from '@/graphql/query/chatquery';
 import { GET_USER_BY_ID } from '@/graphql/query/query';
-import { FaPaperclip, FaSmile, FaPaperPlane, FaPhone, FaVideo, FaInfoCircle, FaEllipsisV, FaCheckCircle, FaTimes } from 'react-icons/fa';
+import { FaPaperclip, FaSmile, FaPaperPlane, FaPhone, FaVideo, FaInfoCircle, FaEllipsisV, FaCheckCircle, FaTimes, FaUsers } from 'react-icons/fa';
 import { useSocket } from '@/utils/SocketContext';
-
+import CreateGroupModal from '@/components/groupmodal';
 export default function ChatPage() {
   // State
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
@@ -29,7 +29,8 @@ export default function ChatPage() {
   const [receivedMessages, setReceivedMessages] = useState<any[]>([]); // Track new messages
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const prevConversationId = useRef<string | null>(null);
-  
+  const [isCreateGroupModalOpen, setIsCreateGroupModalOpen] = useState(false);
+
   // Hooks
   const client = useApolloClient();
   const { socket, isConnected } = useSocket();
@@ -56,7 +57,11 @@ export default function ChatPage() {
       }
     }
   });
-
+  const handleGroupCreated = (groupId: string) => {
+    setActiveConversationId(groupId);
+    setIsCreateGroupModalOpen(false);
+  };
+  
   // Format timestamp helper
   const formatTimestamp = (timestamp: string | number | Date) => {
     if (!timestamp) return '';
@@ -715,7 +720,25 @@ export default function ChatPage() {
               value={searchTerm}
               onChange={handleSearchChange}
             />
-            
+            <div className="p-4 border-b border-gray-200">
+  <div className="flex justify-between items-center mb-2">
+    <h1 className="text-xl font-bold text-gray-800">Messages</h1>
+    <button 
+      onClick={() => setIsCreateGroupModalOpen(true)}
+      className="p-2 bg-indigo-600 text-white rounded-full hover:bg-indigo-700"
+      title="Create group"
+    >
+      <FaUsers className="w-4 h-4" />
+    </button>
+  </div>
+  </div>
+  {isCreateGroupModalOpen && (
+  <CreateGroupModal 
+    isOpen={isCreateGroupModalOpen}
+    onClose={() => setIsCreateGroupModalOpen(false)}
+    onGroupCreated={handleGroupCreated}
+  />
+)}
             {/* Search Loading Indicator */}
             {isSearching && searchLoading && (
               <div className="absolute z-10 mt-1 w-full bg-white rounded-md shadow-lg p-2 text-center text-gray-500">
@@ -956,5 +979,7 @@ export default function ChatPage() {
         </div>
       )}
     </div>
+    
   );
+  
 }

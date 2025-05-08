@@ -158,3 +158,101 @@ export const SEARCH_USERS = gql`
     }
   }
 `;
+
+
+// Group queries
+
+export const GROUP_FRAGMENT = gql`
+  fragment GroupDetails on Group {
+    id
+    name
+    description
+    avatar
+    createdAt
+    updatedAt
+    creator {
+      id
+      firstName
+      lastName
+      avatar
+    }
+    participants {
+      id
+      user {
+        id
+        firstName
+        lastName
+        avatar
+      }
+      joinedAt
+    }
+  }
+`;
+
+// Queries
+export const GET_USER_GROUPS = gql`
+  query GetUserGroups {
+    getUserGroups {
+      ...GroupDetails
+    }
+  }
+  ${GROUP_FRAGMENT}
+`;
+
+export const GET_GROUP = gql`
+  query GetGroup($groupId: ID!) {
+    getGroup(groupId: $groupId) {
+      ...GroupDetails
+    }
+  }
+  ${GROUP_FRAGMENT}
+`;
+
+// Mutations
+export const CREATE_GROUP = gql`
+  mutation CreateGroup($input: CreateGroupInput!) {
+    createGroup(input: $input) {
+      ...GroupDetails
+    }
+  }
+  ${GROUP_FRAGMENT}
+`;
+
+export const UPDATE_GROUP = gql`
+  mutation UpdateGroup($input: UpdateGroupInput!) {
+    updateGroup(input: $input) {
+      ...GroupDetails
+    }
+  }
+  ${GROUP_FRAGMENT}
+`;
+
+export const ADD_GROUP_PARTICIPANTS = gql`
+  mutation AddGroupParticipants($groupId: ID!, $participantIds: [ID!]!) {
+    addGroupParticipants(groupId: $groupId, participantIds: $participantIds) {
+      ...GroupDetails
+    }
+  }
+  ${GROUP_FRAGMENT}
+`;
+
+export const REMOVE_GROUP_PARTICIPANT = gql`
+  mutation RemoveGroupParticipant($groupId: ID!, $participantId: ID!) {
+    removeGroupParticipant(groupId: $groupId, participantId: $participantId) {
+      ...GroupDetails
+    }
+  }
+  ${GROUP_FRAGMENT}
+`;
+
+export const LEAVE_GROUP = gql`
+  mutation LeaveGroup($groupId: ID!) {
+    leaveGroup(groupId: $groupId)
+  }
+`;
+
+export const DELETE_GROUP = gql`
+  mutation DeleteGroup($groupId: ID!) {
+    deleteGroup(groupId: $groupId)
+  }
+`;
