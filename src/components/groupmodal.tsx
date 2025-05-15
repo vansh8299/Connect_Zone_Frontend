@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { useMutation, useQuery } from '@apollo/client';
-import { FaTimes, FaUsers, FaInfoCircle } from 'react-icons/fa';
+import { FaTimes, FaUsers, FaInfoCircle, FaImage } from 'react-icons/fa';
+import { HiPhoto } from 'react-icons/hi2';
 import { CREATE_GROUP, SEARCH_USERS, GET_CONVERSATIONS, GET_USER_GROUPS } from '../graphql/query/chatquery';
 
 interface CreateGroupModalProps {
@@ -16,6 +17,10 @@ const CreateGroupModal: React.FC<CreateGroupModalProps> = ({ isOpen, onClose, on
   const [selectedParticipants, setSelectedParticipants] = useState<any[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [avatarFile, setAvatarFile] = useState<File | null>(null);
+  const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   
   // GraphQL operations
   const [createGroup, { loading: creatingGroup }] = useMutation(CREATE_GROUP, {
@@ -29,6 +34,8 @@ const CreateGroupModal: React.FC<CreateGroupModalProps> = ({ isOpen, onClose, on
       setDescription('');
       setSearchTerm('');
       setSelectedParticipants([]);
+      setAvatarFile(null);
+      setAvatarPreview(null);
       setError(null);
     },
     onError: (error) => {
@@ -42,33 +49,38 @@ const CreateGroupModal: React.FC<CreateGroupModalProps> = ({ isOpen, onClose, on
     variables: { searchTerm },
     skip: searchTerm.length < 2
   });
-  
-  // Handle search input
-  const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const term = e.target.value;
-    setSearchTerm(term);
-    
-    if (term.length >= 2) {
-      setIsSearching(true);
-    } else {
-      setIsSearching(false);
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.match('image.*')) {
+      setError('Please select an image file (JPEG, PNG, etc.)');
+      return;
     }
-  };
-  
-  // Add participant to selection
-  const addParticipant = (user: any) => {
-    if (!selectedParticipants.some(p => p.id === user.id)) {
-      setSelectedParticipants([...selectedParticipants, user]);
+
+    if (file.size > 5 * 1024 * 1024) { // 5MB limit
+      setError('Image size should be less than 5MB');
+      return;
     }
-    setSearchTerm('');
-    setIsSearching(false);
+
+    setAvatarFile(file);
+    setError(null);
+
+    // Create preview
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      setAvatarPreview(event.target?.result as string);
+    };
+    reader.readAsDataURL(file);
   };
-  
-  // Remove participant from selection
-  const removeParticipant = (userId: string) => {
-    setSelectedParticipants(selectedParticipants.filter(p => p.id !== userId));
+
+  const triggerFileInput = () => {
+    fileInputRef.current?.click();
   };
-  
+
+  // ... (keep other existing functions like handleSearchChange, addParticipant, removeParticipant)
+
   // Create group
   const handleCreateGroup = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -85,25 +97,39 @@ const CreateGroupModal: React.FC<CreateGroupModalProps> = ({ isOpen, onClose, on
     }
     
     try {
+      const formData = new FormData();
+      formData.append('name', name.trim());
+      formData.append('description', description.trim());
+      selectedParticipants.forEach((p) => formData.append('participantIds', p.id));
+      
+      if (avatarFile) {
+        formData.append('avatar', avatarFile);
+      }
+
       await createGroup({
         variables: {
           input: {
             name: name.trim(),
             description: description.trim() || undefined,
-            participantIds: selectedParticipants.map(p => p.id)
+            participantIds: selectedParticipants.map(p => p.id),
+            avatarFile: avatarFile || undefined
           }
+        },
+        context: {
+          hasUpload: true // This tells Apollo Client to use multipart form data
         }
       });
     } catch (err) {
       // Error is handled in onError callback
     }
   };
-  
+
   if (!isOpen) return null;
   
   return (
     <div className="fixed inset-0 bg-gray-600 bg-opacity-50 flex items-center justify-center z-50">
       <div className="bg-white rounded-lg shadow-xl w-full max-w-md">
+        {/* Modal header */}
         <div className="flex justify-between items-center p-4 border-b">
           <h2 className="text-xl font-bold text-gray-800">Create New Group</h2>
           <button onClick={onClose} className="text-gray-500 hover:text-gray-700">
@@ -119,130 +145,58 @@ const CreateGroupModal: React.FC<CreateGroupModalProps> = ({ isOpen, onClose, on
               </div>
             )}
             
-            <div className="mb-4">
-              <label className="block text-gray-700 text-sm font-bold mb-2" htmlFor="name">
-                Group Name
-              </label>
-              <input
-                id="name"
-                type="text"
-                placeholder="Enter group name"
-                className="w-full p-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-400"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                required
-              />
-            </div>
-            
-            <div className="mb-4">
-              <label className="block text-gray-700 text-sm font-bold mb-2" htmlFor="description">
-                Description (Optional)
-              </label>
-              <textarea
-                id="description"
-                placeholder="Enter group description"
-                className="w-full p-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-400"
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                rows={2}
-              />
-            </div>
-            
+            {/* Avatar Upload Section */}
             <div className="mb-4">
               <label className="block text-gray-700 text-sm font-bold mb-2">
-                Add Participants
+                Group Avatar (Optional)
               </label>
-              <div className="relative">
-                <input
-                  type="text"
-                  placeholder="Search users to add"
-                  className="w-full p-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-400"
-                  value={searchTerm}
-                  onChange={handleSearchChange}
-                />
-                
-                {isSearching && searchLoading && (
-                  <div className="absolute z-10 mt-1 w-full bg-white rounded-md shadow-lg p-2 text-center text-gray-500">
-                    Searching...
-                  </div>
-                )}
-                
-                {isSearching && searchData?.searchUsers?.length > 0 && (
-                  <div className="absolute z-10 mt-1 w-full bg-white rounded-md shadow-lg max-h-60 overflow-auto">
-                    {searchData.searchUsers.map((user: any) => (
-                      <div
-                        key={user.id}
-                        className="p-2 hover:bg-gray-100 cursor-pointer flex items-center"
-                        onClick={() => addParticipant(user)}
-                      >
-                        <div className="w-10 h-10 rounded-full overflow-hidden bg-gray-200 mr-3">
-                          <img
-                            src={user.avatar || '/globe.svg'}
-                            alt={user.firstName}
-                            className="w-full h-full object-cover"
-                            onError={(e) => {
-                              (e.target as HTMLImageElement).src = '/globe.svg';
-                            }}
-                          />
-                        </div>
-                        <div>
-                          <div className="font-medium">{user.firstName} {user.lastName}</div>
-                          <div className="text-xs text-gray-500">{user.email}</div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                
-                {isSearching && searchTerm.length >= 2 && searchData?.searchUsers?.length === 0 && (
-                  <div className="absolute z-10 mt-1 w-full bg-white rounded-md shadow-lg p-2 text-center text-gray-500">
-                    No users found
-                  </div>
-                )}
-              </div>
-            </div>
-            
-            {selectedParticipants.length > 0 && (
-              <div className="mb-4">
-                <label className="block text-gray-700 text-sm font-bold mb-2">
-                  <div className="flex items-center">
-                    <FaUsers className="mr-2" />
-                    Selected Participants ({selectedParticipants.length})
-                  </div>
-                </label>
-                <div className="flex flex-wrap gap-2 p-2 border rounded-lg bg-gray-50">
-                  {selectedParticipants.map((participant) => (
-                    <div
-                      key={participant.id}
-                      className="bg-indigo-100 text-indigo-800 px-2 py-1 rounded-full flex items-center"
-                    >
-                      <img
-                        src={participant.avatar || '/globe.svg'}
-                        alt={participant.firstName}
-                        className="w-6 h-6 rounded-full mr-1"
-                        onError={(e) => {
-                          (e.target as HTMLImageElement).src = '/globe.svg';
-                        }}
-                      />
-                      <span className="text-sm">{participant.firstName}</span>
-                      <button
-                        onClick={() => removeParticipant(participant.id)}
-                        className="ml-1 text-indigo-600 hover:text-indigo-800"
-                      >
-                        <FaTimes className="w-3 h-3" />
-                      </button>
+              <div className="flex items-center">
+                <div className="mr-4">
+                  {avatarPreview ? (
+                    <img 
+                      src={avatarPreview} 
+                      alt="Group avatar preview" 
+                      className="w-16 h-16 rounded-full object-cover"
+                    />
+                  ) : (
+                    <div className="w-16 h-16 rounded-full bg-gray-200 flex items-center justify-center">
+                      <FaImage className="text-gray-400 text-xl" />
                     </div>
-                  ))}
+                  )}
+                </div>
+                <div>
+                  <input
+                    type="file"
+                    ref={fileInputRef}
+                    onChange={handleFileChange}
+                    accept="image/*"
+                    className="hidden"
+                  />
+                  <button
+                    type="button"
+                    onClick={triggerFileInput}
+                    className="flex items-center px-4 py-2 border border-gray-300 rounded-lg bg-white text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 cursor-pointer"
+                  >
+                    <HiPhoto className="h-5 w-5 text-gray-400 mr-2" />
+                    {avatarPreview ? "Change Picture" : "Upload Picture"}
+                  </button>
+                  {avatarFile && (
+                    <p className="mt-1 text-sm text-gray-500">
+                      {avatarFile.name.length > 20
+                        ? `${avatarFile.name.substring(0, 20)}...`
+                        : avatarFile.name}
+                    </p>
+                  )}
                 </div>
               </div>
-            )}
-            
-            <div className="flex items-center text-gray-600 text-sm mt-4">
-              <FaInfoCircle className="mr-2" />
-              <span>You'll be added as the group creator automatically</span>
             </div>
+
+            {/* Rest of the form (name, description, participants) */}
+            {/* ... (keep the existing form fields) */}
+            
           </div>
           
+          {/* Modal footer */}
           <div className="flex justify-end p-4 border-t">
             <button
               type="button"
@@ -253,10 +207,18 @@ const CreateGroupModal: React.FC<CreateGroupModalProps> = ({ isOpen, onClose, on
             </button>
             <button
               type="submit"
-              className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:bg-indigo-300"
-              disabled={creatingGroup || !name.trim() || selectedParticipants.length === 0}
+              className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:bg-indigo-300 flex items-center"
+              disabled={creatingGroup || isUploading || !name.trim() || selectedParticipants.length === 0}
             >
-              {creatingGroup ? 'Creating...' : 'Create Group'}
+              {creatingGroup ? (
+                <>
+                  <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  Creating...
+                </>
+              ) : 'Create Group'}
             </button>
           </div>
         </form>
