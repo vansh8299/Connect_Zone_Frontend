@@ -5,7 +5,9 @@ export const GET_CONVERSATIONS = gql`
   query GetConversations {
     getConversations {
       id
+      name
       isGroup
+      
       participants {
         user {
           id
@@ -19,10 +21,22 @@ export const GET_CONVERSATIONS = gql`
         content
         createdAt
       }
+      group {
+        id
+        name
+        description
+        avatar
+        createdAt
+        creator {
+          id
+          firstName
+          lastName
+          avatar
+        }
+      }
     }
   }
 `;
-
 export const GET_MESSAGES = gql`
   query GetMessages($conversationId: ID!) {
     getMessages(conversationId: $conversationId) {

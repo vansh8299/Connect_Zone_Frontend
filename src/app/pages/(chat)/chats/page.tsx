@@ -66,8 +66,10 @@ export default function ChatPage() {
 
   // Fetch conversations query
   const { data: conversationsData, loading: conversationsLoading } = useQuery(GET_CONVERSATIONS, {
+    
     onCompleted: (data: { getConversations: any[] }) => {
       if (data?.getConversations?.length > 0 && !activeConversationId) {
+        console.log(data)
         setActiveConversationId(data.getConversations[0].id);
         
         const firstConversation = data.getConversations[0];
@@ -154,7 +156,7 @@ export default function ChatPage() {
     : null;
 
   // Check if current user is admin of the group
-  const isGroupAdmin = groupDetails?.admin?.id === currentUserId;
+  const isGroupAdmin = groupDetails?.creator?.id === currentUserId;
 
   // Socket message handling
   useEffect(() => {
@@ -306,14 +308,17 @@ export default function ChatPage() {
     return otherParticipant ? `${otherParticipant.user.firstName} ${otherParticipant.user.lastName}` : 'Unknown';
   };
 
-  const getParticipantAvatar = (conversation: any) => {
-    if (!conversation) return '/globe.svg';
-    if (conversation.isGroup) return '/group-avatar.svg';
-    const otherParticipant = conversation.participants.find(
-      (p: any) => p.user.id !== currentUserId
-    );
-    return otherParticipant?.user?.avatar || '/globe.svg';
-  };
+ const getParticipantAvatar = (conversation: any) => {
+  if (!conversation) return '/globe.svg';
+  if (conversation.isGroup) {
+    // Use the group's avatar if available, otherwise fallback to default
+    return conversation.group?.avatar || '/group-avatar.svg';
+  }
+  const otherParticipant = conversation.participants.find(
+    (p: any) => p.user.id !== currentUserId
+  );
+  return otherParticipant?.user?.avatar || '/globe.svg';
+};
 
   const fetchUserDetails = (userId: string) => {
     getUserById({ variables: { id: userId } });
@@ -480,6 +485,7 @@ export default function ChatPage() {
 
   const handleRemoveParticipant = async (userId: string) => {
     try {
+      console.log(userId)
       await removeGroupParticipant({
         variables: { groupId: activeConversationId, participantId: userId }
       });
@@ -622,8 +628,17 @@ export default function ChatPage() {
         
         <div className="flex flex-col items-center mb-6">
           <div className="w-24 h-24 rounded-full overflow-hidden bg-gray-200 mb-4 flex items-center justify-center">
-            <FaUsers className="w-12 h-12 text-indigo-600" />
-          </div>
+  {groupDetails.avatar ? (
+    <img
+      src={groupDetails.avatar}
+      alt={groupDetails.name}
+      className="w-full h-full object-cover"
+      onError={(e) => (e.target as HTMLImageElement).src = '/group-avatar.svg'}
+    />
+  ) : (
+    <FaUsers className="w-12 h-12 text-indigo-600" />
+  )}
+</div>
           
           {isEditingGroup ? (
             <form onSubmit={handleUpdateGroup} className="w-full max-w-xs">
@@ -691,15 +706,15 @@ export default function ChatPage() {
             <div className="flex items-center">
               <div className="w-8 h-8 rounded-full overflow-hidden bg-gray-200 mr-3">
                 <img
-                  src={groupDetails.admin?.avatar || '/globe.svg'}
-                  alt={groupDetails.admin?.firstName}
+                  src={groupDetails.creator?.avatar || '/globe.svg'}
+                  alt={groupDetails.creator?.firstName}
                   className="w-full h-full object-cover"
                   onError={(e) => (e.target as HTMLImageElement).src = '/globe.svg'}
                 />
               </div>
               <span className="text-gray-800">
-                {groupDetails.admin?.firstName} {groupDetails.admin?.lastName}
-                {groupDetails.admin?.id === currentUserId && ' (You)'}
+                {groupDetails.creator?.firstName} {groupDetails.creator?.lastName}
+                {groupDetails.creator?.id === currentUserId && ' (You)'}
               </span>
             </div>
           </div>
@@ -722,7 +737,7 @@ export default function ChatPage() {
                       {participant.user.firstName} {participant.user.lastName}
                       {participant.user.id === currentUserId && ' (You)'}
                     </p>
-                    {participant.user.id === groupDetails.admin?.id && (
+                    {participant.user.id === groupDetails.creator?.id && (
                       <p className="text-xs text-indigo-600">Admin</p>
                     )}
                   </div>
@@ -916,25 +931,35 @@ export default function ChatPage() {
                   }`}
                 >
                   <div className="relative">
-                    <div className="w-12 h-12 rounded-full overflow-hidden bg-gray-200">
-                      <img 
-                        src={conversation.isGroup 
-                          ? '/group-avatar.svg' 
-                          : otherParticipant?.user?.avatar || '/globe.svg'} 
-                        alt={conversation.isGroup ? 'Group' : `${otherParticipant?.user?.firstName || 'Unknown'}'s avatar`}
-                        className="w-full h-full object-cover"
-                        onError={(e) => (e.target as HTMLImageElement).src = '/globe.svg'}
-                      />
-                    </div>
+       <div className="w-12 h-12 rounded-full overflow-hidden bg-gray-200 mr-3">
+  <img 
+    src={
+      conversation.isGroup 
+        ? (conversation.group?.avatar || conversation.avatar || '/group-avatar.svg')
+        : (otherParticipant?.user?.avatar || '/globe.svg')
+    } 
+    alt={
+      conversation.isGroup 
+        ? conversation.group?.name || 'Group'
+        : `${otherParticipant?.user?.firstName || 'Unknown'}'s avatar`
+    }
+    className="w-full h-full object-cover"
+    onError={(e) => {
+      (e.target as HTMLImageElement).src = conversation.isGroup 
+        ? '/group-avatar.svg' 
+        : '/globe.svg'
+    }}
+  />
+</div>
                   </div>
                   
                   <div className="ml-3 flex-grow">
                     <div className="flex justify-between items-center">
-                      <h3 className="font-medium text-gray-800">
-                        {conversation.isGroup 
-                          ? conversation.name || 'Group Chat'
-                          : otherParticipant?.user?.firstName || 'Unknown'}
-                      </h3>
+                     <h3 className="font-medium text-gray-800">
+  {conversation.isGroup 
+    ? (conversation.group?.name || conversation.name || 'Group Chat')
+    : (otherParticipant?.user?.firstName || 'Unknown')}
+</h3>
                       <span className="text-xs text-gray-500">
                         {formatTimestamp(conversation.messages[0]?.createdAt)}
                       </span>
