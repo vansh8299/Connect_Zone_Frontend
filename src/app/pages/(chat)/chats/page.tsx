@@ -16,12 +16,14 @@ import {
   ADD_GROUP_PARTICIPANTS,
   REMOVE_GROUP_PARTICIPANT,
   LEAVE_GROUP,
-  DELETE_GROUP
+  DELETE_GROUP,
+  DELETE_MESSAGE
 } from '@/graphql/query/chatquery';
 import { GET_USER_BY_ID } from '@/graphql/query/query';
-import { FaPaperclip, FaSmile, FaPaperPlane, FaPhone, FaVideo, FaInfoCircle, FaEllipsisV, FaCheckCircle, FaTimes, FaUsers, FaEdit, FaUserPlus, FaCheck, FaTrash, FaSignOutAlt } from 'react-icons/fa';
+import { FaPaperclip, FaSmile, FaPaperPlane, FaPhone, FaVideo, FaInfoCircle, FaEllipsisV, FaCheckCircle, FaTimes, FaUsers, FaEdit, FaUserPlus, FaCheck, FaTrash, FaSignOutAlt, FaCamera } from 'react-icons/fa';
 import { useSocket } from '@/utils/SocketContext';
 import CreateGroupModal from '@/components/groupmodal';
+import { useRouter } from 'next/navigation';
 
 export default function ChatPage() {
   // State
@@ -41,7 +43,12 @@ export default function ChatPage() {
   const [groupSearchTerm, setGroupSearchTerm] = useState('');
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
+  const [avatarFile, setAvatarFile] = useState<File | null>(null);
+const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
+const [showDeleteConfirmMessage, setShowDeleteConfirmMessage] = useState(false);
+const [messageToDelete, setMessageToDelete] = useState<string | null>(null);
 
+const router = useRouter()
   // Refs
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const prevConversationId = useRef<string | null>(null);
@@ -149,7 +156,7 @@ export default function ChatPage() {
   const [removeGroupParticipant] = useMutation(REMOVE_GROUP_PARTICIPANT);
   const [leaveGroup] = useMutation(LEAVE_GROUP);
   const [deleteGroup] = useMutation(DELETE_GROUP);
-
+const [deleteMessageMutation] = useMutation(DELETE_MESSAGE);
   // Get the current active conversation
   const activeConversation = activeConversationId && conversationsData?.getConversations 
     ? conversationsData.getConversations.find((c: any) => c.id === activeConversationId)
@@ -162,45 +169,71 @@ export default function ChatPage() {
   useEffect(() => {
     if (!socket) return;
       
-    const handleNewMessage = (data: { type: string; payload: any }) => {
-      if (data.type === 'NEW_MESSAGE') {
-        const newMessage = data.payload;
-              
-        if (!newMessage || !newMessage.conversationId) return;
+const handleNewMessage = (data: { type: string; payload: any }) => {
+  if (data.type === 'NEW_MESSAGE') {
+    const newMessage = data.payload;
+          
+    if (!newMessage || !newMessage.conversationId) return;
+    
+    if (newMessage.conversationId === activeConversationId) {
+      try {
+        const existingMessages = client.readQuery({
+          query: GET_MESSAGES,
+          variables: { conversationId: activeConversationId }
+        })?.getMessages || [];
         
-        if (newMessage.conversationId === activeConversationId) {
-          try {
-            const existingMessages = client.readQuery({
-              query: GET_MESSAGES,
-              variables: { conversationId: activeConversationId }
-            })?.getMessages || [];
-            
-            if (!existingMessages.some((msg: any) => msg.id === newMessage.id)) {
-              client.writeQuery({
-                query: GET_MESSAGES,
-                variables: { conversationId: activeConversationId },
-                data: { getMessages: [...existingMessages, newMessage] }
-              });
-              
-              setTimeout(() => {
-                messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-              }, 100);
-            }
-          } catch (err) {
-            console.error("Error updating cache:", err);
-          }
+        if (!existingMessages.some((msg: any) => msg.id === newMessage.id)) {
+          client.writeQuery({
+            query: GET_MESSAGES,
+            variables: { conversationId: activeConversationId },
+            data: { getMessages: [...existingMessages, newMessage] }
+          });
+          
+          setTimeout(() => {
+            messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+          }, 100);
         }
-        
-        setReceivedMessages(prev => {
-          if (prev.some(msg => msg.id === newMessage.id)) {
-            return prev;
-          }
-          return [...prev, newMessage];
-        });
-              
-        client.refetchQueries({ include: [GET_CONVERSATIONS] });
+      } catch (err) {
+        console.error("Error updating cache:", err);
       }
-    };
+    }
+    
+    setReceivedMessages(prev => {
+      if (prev.some(msg => msg.id === newMessage.id)) {
+        return prev;
+      }
+      return [...prev, newMessage];
+    });
+          
+    client.refetchQueries({ include: [GET_CONVERSATIONS] });
+  } else if (data.type === 'MESSAGE_DELETED') {
+    const { messageId, conversationId } = data.payload;
+    
+    if (conversationId === activeConversationId) {
+      try {
+        const currentMessages = client.readQuery({
+          query: GET_MESSAGES,
+          variables: { conversationId: activeConversationId }
+        })?.getMessages || [];
+        
+        const updatedMessages = currentMessages.filter((msg: any) => msg.id !== messageId);
+        
+        client.writeQuery({
+          query: GET_MESSAGES,
+          variables: { conversationId: activeConversationId },
+          data: { getMessages: updatedMessages }
+        });
+      } catch (err) {
+        console.error("Error updating cache for deleted message:", err);
+      }
+    }
+    
+    // Remove from received messages state
+    setReceivedMessages(prev => prev.filter(msg => msg.id !== messageId));
+    
+    client.refetchQueries({ include: [GET_CONVERSATIONS] });
+  }
+};
       
     socket.on('message', handleNewMessage);
     return () => {
@@ -407,7 +440,51 @@ export default function ChatPage() {
       });
     }
   };
-
+const handleDeleteMessage = async () => {
+  if (!messageToDelete) return;
+  
+  try {
+    const response = await deleteMessageMutation({
+      variables: { messageId: messageToDelete }
+    });
+    
+    if (response.data?.deleteMessage?.success) {
+      // Remove message from local cache
+      const currentMessages = client.readQuery({
+        query: GET_MESSAGES,
+        variables: { conversationId: activeConversationId }
+      })?.getMessages || [];
+      
+      const updatedMessages = currentMessages.filter((msg: any) => msg.id !== messageToDelete);
+      
+      client.writeQuery({
+        query: GET_MESSAGES,
+        variables: { conversationId: activeConversationId },
+        data: { getMessages: updatedMessages }
+      });
+      
+      // Also remove from received messages state
+      setReceivedMessages(prev => prev.filter(msg => msg.id !== messageToDelete));
+      
+      // Emit socket event to notify other participants
+      if (socket && isConnected) {
+        socket.emit('message', {
+          type: 'MESSAGE_DELETED',
+          payload: {
+            messageId: messageToDelete,
+            conversationId: activeConversationId,
+            senderId: currentUserId
+          }
+        });
+      }
+    }
+  } catch (error) {
+    console.error('Error deleting message:', error);
+  } finally {
+    setShowDeleteConfirmMessage(false);
+    setMessageToDelete(null);
+  }
+};
   // Search handling
   const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const term = e.target.value;
@@ -450,26 +527,58 @@ export default function ChatPage() {
     setIsCreateGroupModalOpen(false);
   };
 
-  const handleUpdateGroup = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!groupName.trim()) return;
+const handleUpdateGroup = async (e: React.FormEvent) => {
+  e.preventDefault();
+  if (!groupName.trim()) return;
+
+  try {
+    let avatarBase64 = null;
     
-    try {
-      await updateGroup({
-        variables: {
-          input: {
-            groupId: activeConversationId,
-            name: groupName.trim(),
-            description: groupDescription.trim() || undefined
-          }
-        }
-      });
-      setIsEditingGroup(false);
-      refetchGroup();
-    } catch (error) {
-      console.error('Error updating group:', error);
+    // Convert new avatar to base64 if selected
+    if (avatarFile) {
+      avatarBase64 = await convertFileToBase64(avatarFile);
     }
-  };
+
+    await updateGroup({
+      variables: {
+        input: {
+          groupId: activeConversationId,
+          name: groupName.trim(),
+          description: groupDescription.trim() || undefined,
+          avatarBase64: avatarBase64 || undefined
+        }
+      }
+    });
+
+    setIsEditingGroup(false);
+    setAvatarFile(null);
+    setAvatarPreview(null);
+    
+    const { data } = await refetchGroup();
+    
+    // Update state with new group details
+    if (data?.getGroup) {
+      setGroupDetails(data.getGroup);
+      setGroupName(data.getGroup.name);
+      setGroupDescription(data.getGroup.description || '');
+    }
+  } catch (error) {
+    console.error('Error updating group:', error);
+  }
+};
+
+// Helper function to convert file to base64
+const convertFileToBase64 = (file: File): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = () => {
+      const base64String = reader.result?.toString() || '';
+      resolve(base64String);
+    };
+    reader.onerror = (error) => reject(error);
+  });
+};
 
   const handleAddParticipant = async (userId: string) => {
     try {
@@ -477,23 +586,38 @@ export default function ChatPage() {
         variables: { groupId: activeConversationId, participantIds: [userId] }
       });
       setGroupSearchTerm('');
-      refetchGroup();
+        const { data } = await refetchGroup(); // Await and capture the new data
+
+    // Update state with new group details
+    if (data?.getGroup) {
+      setGroupDetails(data.getGroup);
+      setGroupName(data.getGroup.name);
+      setGroupDescription(data.getGroup.description || '');
+    }
+
     } catch (error) {
       console.error('Error adding participant:', error);
     }
   };
 
-  const handleRemoveParticipant = async (userId: string) => {
-    try {
-      console.log(userId)
-      await removeGroupParticipant({
-        variables: { groupId: activeConversationId, participantId: userId }
-      });
-      refetchGroup();
-    } catch (error) {
-      console.error('Error removing participant:', error);
+ const handleRemoveParticipant = async (userId: string) => {
+  try {
+    console.log(userId)
+    await removeGroupParticipant({
+      variables: { groupId: activeConversationId, participantId: userId }
+    });
+    const { data } = await refetchGroup();
+    
+    // Update state with new group details
+    if (data?.getGroup) {
+      setGroupDetails(data.getGroup);
+      setGroupName(data.getGroup.name);
+      setGroupDescription(data.getGroup.description || '');
     }
-  };
+  } catch (error) {
+    console.error('Error removing participant:', error);
+  }
+};
 
   const handleLeaveGroup = async () => {
     try {
@@ -641,37 +765,81 @@ export default function ChatPage() {
 </div>
           
           {isEditingGroup ? (
-            <form onSubmit={handleUpdateGroup} className="w-full max-w-xs">
-              <input
-                type="text"
-                value={groupName}
-                onChange={(e) => setGroupName(e.target.value)}
-                className="w-full p-2 border rounded mb-2"
-                required
-              />
-              <textarea
-                value={groupDescription}
-                onChange={(e) => setGroupDescription(e.target.value)}
-                className="w-full p-2 border rounded mb-2"
-                placeholder="Group description"
-              />
-              <div className="flex space-x-2">
-                <button
-                  type="submit"
-                  className="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700"
-                >
-                  Save
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setIsEditingGroup(false)}
-                  className="px-4 py-2 bg-gray-200 text-gray-800 rounded hover:bg-gray-300"
-                >
-                  Cancel
-                </button>
-              </div>
-            </form>
-          ) : (
+  <form onSubmit={handleUpdateGroup} className="w-full max-w-xs">
+    {/* Avatar Upload */}
+    <div className="relative mb-4">
+      <div className="w-24 h-24 rounded-full overflow-hidden bg-gray-200 mx-auto">
+        {groupDetails.avatar ? (
+          <img
+            src={groupDetails.avatar}
+            alt={groupDetails.name}
+            className="w-full h-full object-cover"
+            onError={(e) => (e.target as HTMLImageElement).src = '/group-avatar.svg'}
+          />
+        ) : (
+          <FaUsers className="w-full h-full p-6 text-indigo-600" />
+        )}
+      </div>
+      <label className="absolute bottom-0 right-0 bg-white rounded-full p-2 shadow-md cursor-pointer hover:bg-gray-100">
+        <FaCamera className="w-5 h-5 text-indigo-600" />
+        <input
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={(e) => {
+            if (e.target.files?.[0]) {
+              setAvatarFile(e.target.files[0]);
+              // Optional: Show preview
+              const reader = new FileReader();
+              reader.onload = (event) => {
+                setAvatarPreview(event.target?.result as string);
+              };
+              reader.readAsDataURL(e.target.files[0]);
+            }
+          }}
+        />
+      </label>
+    </div>
+
+    {/* Name Field */}
+    <input
+      type="text"
+      value={groupName}
+      onChange={(e) => setGroupName(e.target.value)}
+      className="w-full p-2 border rounded mb-2"
+      required
+      placeholder="Group name"
+    />
+
+    {/* Description Field */}
+    <textarea
+      value={groupDescription}
+      onChange={(e) => setGroupDescription(e.target.value)}
+      className="w-full p-2 border rounded mb-2"
+      placeholder="Group description (optional)"
+    />
+
+    <div className="flex space-x-2">
+      <button
+        type="submit"
+        className="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700"
+      >
+        Save
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setIsEditingGroup(false);
+          setAvatarFile(null);
+          setAvatarPreview(null);
+        }}
+        className="px-4 py-2 bg-gray-200 text-gray-800 rounded hover:bg-gray-300"
+      >
+        Cancel
+      </button>
+    </div>
+  </form>
+): (
             <>
               <h3 className="text-2xl font-semibold text-gray-800">
                 {groupDetails.name}
@@ -1056,41 +1224,61 @@ export default function ChatPage() {
                 </div>
               </div>
             ) : (
-              <div className="space-y-4">
-                {allMessages.map((msg: any) => (
-                  <div
-                    key={msg.id}
-                    className={`flex ${msg.sender.id === currentUserId ? 'justify-end' : 'justify-start'}`}
-                  >
-                    <div
-                      className={`max-w-xs lg:max-w-md px-4 py-2 rounded-lg ${
-                        msg.sender.id === currentUserId
-                          ? 'bg-indigo-600 text-white rounded-br-none'
-                          : 'bg-white text-gray-800 rounded-bl-none border border-gray-200'
-                      }`}
-                    >
-                      <p>{msg.content}</p>
-                      <p className={`text-xs mt-1 ${
-                        msg.sender.id === currentUserId 
-                          ? 'text-indigo-200' 
-                          : 'text-gray-500'
-                      }`}>
-                        {formatTimestamp(msg.createdAt)}
-                        {msg.sender.id === currentUserId && (
-                          <span className="ml-1">
-                            {msg.readBy?.length > 1 ? (
-                              <FaCheckCircle className="inline text-blue-300" />
-                            ) : (
-                              <FaCheck className="inline" />
-                            )}
-                          </span>
-                        )}
-                      </p>
-                    </div>
-                  </div>
-                ))}
-                <div ref={messagesEndRef} />
-              </div>
+           <div className="space-y-4">
+  {allMessages.map((msg: any) => (
+    <div
+      key={msg.id}
+      className={`flex ${msg.sender.id === currentUserId ? 'justify-end' : 'justify-start'}`}
+    >
+      <div className="relative group">
+        <div
+          className={`max-w-xs lg:max-w-md px-4 py-2 rounded-lg ${
+            msg.sender.id === currentUserId
+              ? 'bg-indigo-600 text-white rounded-br-none'
+              : 'bg-white text-gray-800 rounded-bl-none border border-gray-200'
+          }`}
+        >
+          <p>{msg.content}</p>
+          <p className={`text-xs mt-1 ${
+            msg.sender.id === currentUserId 
+              ? 'text-indigo-200' 
+              : 'text-gray-500'
+          }`}>
+            {formatTimestamp(msg.createdAt)}
+            {msg.sender.id === currentUserId && (
+              <span className="ml-1">
+                {msg.readBy?.length > 1 ? (
+                  <FaCheckCircle className="inline text-blue-300" />
+                ) : (
+                  <FaCheck className="inline" />
+                )}
+              </span>
+            )}
+          </p>
+        </div>
+        
+        {/* Delete button - only show for user's own messages */}
+        {msg.sender.id === currentUserId && (
+          <button
+            onClick={() => {
+              setMessageToDelete(msg.id);
+              setShowDeleteConfirmMessage(true);
+            }}
+            className={`absolute top-0 right-0 transform translate-x-2 -translate-y-2 p-1 rounded-full opacity-0 group-hover:opacity-100 transition-opacity ${
+              msg.sender.id === currentUserId
+                ? 'bg-red-500 hover:bg-red-600 text-white'
+                : 'bg-gray-200 hover:bg-gray-300 text-gray-600'
+            }`}
+            title="Delete message"
+          >
+            <FaTimes className="w-3 h-3" />
+          </button>
+        )}
+      </div>
+    </div>
+  ))}
+  <div ref={messagesEndRef} />
+</div>
             )}
           </div>
           
@@ -1194,6 +1382,34 @@ export default function ChatPage() {
           </div>
         </div>
       )}
+      {showDeleteConfirmMessage && (
+  <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+    <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-sm">
+      <h3 className="text-lg font-bold text-gray-800 mb-4">Delete Message</h3>
+      <p className="text-gray-600 mb-6">
+        Are you sure you want to delete this message? This action cannot be undone.
+      </p>
+      <div className="flex justify-end space-x-2">
+        <button
+          onClick={() => {
+            setShowDeleteConfirmMessage(false);
+            setMessageToDelete(null);
+          }}
+          className="px-4 py-2 text-gray-600 hover:text-gray-800"
+        >
+          Cancel
+        </button>
+        <button
+          onClick={handleDeleteMessage}
+          className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600"
+        >
+          Delete
+        </button>
+      </div>
+    </div>
+  </div>
+)}
+
     </div>
   );
               }

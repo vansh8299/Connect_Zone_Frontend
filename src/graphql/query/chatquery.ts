@@ -82,7 +82,15 @@ export const SEND_MESSAGE = gql`
     }
   }
 `;
-
+export const DELETE_MESSAGE = gql`
+  mutation DeleteMessage($messageId: String!) {
+    deleteMessage(messageId: $messageId) {
+      success
+      messageId
+      conversationId
+    }
+  }
+`;
 export const CREATE_CONVERSATION = gql`
   mutation CreateConversation($participantIds: [ID!]!) {
     createConversation(participantIds: $participantIds) {
