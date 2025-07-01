@@ -20,7 +20,7 @@ import {
   DELETE_MESSAGE
 } from '@/graphql/query/chatquery';
 import { GET_USER_BY_ID } from '@/graphql/query/query';
-import { FaPaperclip, FaSmile, FaPaperPlane, FaPhone, FaVideo, FaInfoCircle, FaEllipsisV, FaCheckCircle, FaTimes, FaUsers, FaEdit, FaUserPlus, FaCheck, FaTrash, FaSignOutAlt, FaCamera } from 'react-icons/fa';
+import { FaPaperclip, FaSmile, FaPaperPlane, FaPhone, FaVideo, FaInfoCircle, FaEllipsisV, FaCheckCircle, FaTimes, FaUsers, FaEdit, FaUserPlus, FaCheck, FaTrash, FaSignOutAlt, FaCamera, FaChevronDown, FaUser } from 'react-icons/fa';
 import { useSocket } from '@/utils/SocketContext';
 import CreateGroupModal from '@/components/groupmodal';
 import { useRouter } from 'next/navigation';
@@ -42,6 +42,7 @@ export default function ChatPage() {
   const [groupDescription, setGroupDescription] = useState('');
   const [groupSearchTerm, setGroupSearchTerm] = useState('');
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [openDropdownId, setOpenDropdownId] = useState<string | null>(null);
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
 const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
@@ -169,24 +170,32 @@ const [deleteMessageMutation] = useMutation(DELETE_MESSAGE);
   useEffect(() => {
     if (!socket) return;
       
+// In your useEffect for socket messages
 const handleNewMessage = (data: { type: string; payload: any }) => {
   if (data.type === 'NEW_MESSAGE') {
     const newMessage = data.payload;
           
     if (!newMessage || !newMessage.conversationId) return;
     
+    // Remove the sender check - we want to handle all new messages
+    setReceivedMessages(prev => {
+      // Remove any existing message with same ID (shouldn't happen but just in case)
+      const filtered = prev.filter(msg => msg.id !== newMessage.id);
+      return [...filtered, newMessage];
+    });
+    
     if (newMessage.conversationId === activeConversationId) {
       try {
-        const existingMessages = client.readQuery({
+        const currentMessages = client.readQuery({
           query: GET_MESSAGES,
           variables: { conversationId: activeConversationId }
         })?.getMessages || [];
         
-        if (!existingMessages.some((msg: any) => msg.id === newMessage.id)) {
+        if (!currentMessages.some((msg: { id: any; }) => msg.id === newMessage.id)) {
           client.writeQuery({
             query: GET_MESSAGES,
             variables: { conversationId: activeConversationId },
-            data: { getMessages: [...existingMessages, newMessage] }
+            data: { getMessages: [...currentMessages, newMessage] }
           });
           
           setTimeout(() => {
@@ -198,38 +207,42 @@ const handleNewMessage = (data: { type: string; payload: any }) => {
       }
     }
     
-    setReceivedMessages(prev => {
-      if (prev.some(msg => msg.id === newMessage.id)) {
-        return prev;
-      }
-      return [...prev, newMessage];
-    });
-          
+    // Always refetch conversations to update the last message preview
     client.refetchQueries({ include: [GET_CONVERSATIONS] });
-  } else if (data.type === 'MESSAGE_DELETED') {
-    const { messageId, conversationId } = data.payload;
+  }else if (data.type === 'MESSAGE_DELETED') {
+    const { messageId, conversationId, deleteType, senderId } = data.payload;
     
-    if (conversationId === activeConversationId) {
-      try {
-        const currentMessages = client.readQuery({
-          query: GET_MESSAGES,
-          variables: { conversationId: activeConversationId }
-        })?.getMessages || [];
-        
-        const updatedMessages = currentMessages.filter((msg: any) => msg.id !== messageId);
-        
-        client.writeQuery({
-          query: GET_MESSAGES,
-          variables: { conversationId: activeConversationId },
-          data: { getMessages: updatedMessages }
-        });
-      } catch (err) {
-        console.error("Error updating cache for deleted message:", err);
+    // For "DELETE_FOR_ME", only update if it's for the current user
+    if (deleteType === 'DELETE_FOR_ME' && senderId === currentUserId) {
+      // Update received messages
+      setReceivedMessages(prev => prev.filter(msg => msg.id !== messageId));
+      
+      // Update cache if it's the active conversation
+      if (conversationId === activeConversationId) {
+        try {
+          const currentMessages = client.readQuery({
+            query: GET_MESSAGES,
+            variables: { conversationId }
+          })?.getMessages || [];
+          
+          const updatedMessages = currentMessages.filter((msg: any) => msg.id !== messageId);
+          
+          client.writeQuery({
+            query: GET_MESSAGES,
+            variables: { conversationId },
+            data: { getMessages: updatedMessages }
+          });
+        } catch (err) {
+          console.error("Error updating cache for deleted message:", err);
+        }
       }
     }
     
-    // Remove from received messages state
-    setReceivedMessages(prev => prev.filter(msg => msg.id !== messageId));
+    // Remove from received messages state if deleted for everyone or for me
+    if (deleteType === 'DELETE_FOR_EVERYONE' || 
+        (deleteType === 'DELETE_FOR_ME' && data.payload.userId === currentUserId)) {
+      setReceivedMessages(prev => prev.filter(msg => msg.id !== messageId));
+    }
     
     client.refetchQueries({ include: [GET_CONVERSATIONS] });
   }
@@ -240,7 +253,18 @@ const handleNewMessage = (data: { type: string; payload: any }) => {
       socket.off('message', handleNewMessage);
     };
   }, [socket, client, activeConversationId]);
+useEffect(() => {
+  const handleClickOutside = (event: MouseEvent) => {
+    if (openDropdownId && !(event.target as Element).closest('.relative')) {
+      setOpenDropdownId(null);
+    }
+  };
 
+  document.addEventListener('mousedown', handleClickOutside);
+  return () => {
+    document.removeEventListener('mousedown', handleClickOutside);
+  };
+}, [openDropdownId]);
   // Socket room management
   useEffect(() => {
     if (!socket || !isConnected || !activeConversationId) return;
@@ -304,28 +328,54 @@ const handleNewMessage = (data: { type: string; payload: any }) => {
   }, [activeConversationId, conversationsData, currentUserId]);
 
   // Combined messages with proper sorting
-  const allMessages = useMemo(() => {
-    const serverMessages = messagesData?.getMessages || [];
-    const newMessages = receivedMessages.filter(
-      msg => msg.conversationId === activeConversationId
-    );
-    
-    const messagesMap = new Map();
-    serverMessages.forEach((msg: { id: any; }) => messagesMap.set(msg.id, msg));
-    newMessages.forEach(msg => messagesMap.set(msg.id, msg));
-    
-    return Array.from(messagesMap.values()).sort((a, b) => 
-      new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
-    );
-  }, [messagesData?.getMessages, receivedMessages, activeConversationId]);
+const allMessages = useMemo(() => {
+  const serverMessages = messagesData?.getMessages || [];
+  const newMessages = receivedMessages.filter(
+    msg => msg.conversationId === activeConversationId
+  );
+  
+  // Create a map to deduplicate messages
+  const messagesMap = new Map();
+  
+  // First add server messages
+  serverMessages.forEach((msg: { id: any; }) => messagesMap.set(msg.id, msg));
+  
+  // Then add received messages, overwriting any duplicates
+  newMessages.forEach(msg => {
+    // Skip optimistic messages that have been replaced
+    if (!msg.isOptimistic || !messagesMap.has(msg.id)) {
+      messagesMap.set(msg.id, msg);
+    }
+  });
+  
+  return Array.from(messagesMap.values()).sort((a, b) => 
+    new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+  );
+}, [messagesData?.getMessages, receivedMessages, activeConversationId]);
 
   // Helper functions
-  const formatTimestamp = (timestamp: string | number | Date) => {
-    if (!timestamp) return '';
-    const date = new Date(timestamp);
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  };
-
+const formatTimestamp = (timestamp: string | number | Date) => {
+  if (!timestamp) return '';
+  
+  try {
+    // Handle both string timestamps and Date objects
+    const date = timestamp instanceof Date ? timestamp : new Date(timestamp);
+    
+    // Check if the date is valid
+    if (isNaN(date.getTime())) {
+      return '';
+    }
+    
+    return date.toLocaleTimeString([], { 
+      hour: '2-digit', 
+      minute: '2-digit',
+      hour12: true
+    });
+  } catch (error) {
+    console.error('Error formatting timestamp:', error);
+    return '';
+  }
+};
   
 
   const getParticipantName = (conversation: any) => {
@@ -358,33 +408,37 @@ const handleNewMessage = (data: { type: string; payload: any }) => {
   };
 
   // Message handling
-  const handleSendMessage = async () => {
-    if (!message.trim() || !activeConversationId) return;
-    
-    const messageContent = message.trim();
-    const optimisticId = `temp-${Date.now()}`;
-    const timestamp = new Date().toISOString();
-    
-    setMessage('');
-    
-    // Optimistic UI update
-    const optimisticMessage = {
-      __typename: 'Message',
-      id: optimisticId,
-      content: messageContent,
-      sender: { __typename: 'User', id: currentUserId, firstName: 'You', lastName: '', avatar: '' },
-      readBy: [{
-        __typename: 'MessageRead',
-        id: `read-${optimisticId}`,
-        user: { __typename: 'User', id: currentUserId, firstName: 'You', lastName: '', avatar: '' },
-        readAt: timestamp
-      }],
-      createdAt: timestamp,
-      updatedAt: timestamp,
-      type: 'TEXT',
-      conversationId: activeConversationId
-    };
-    
+const handleSendMessage = async () => {
+  if (!message.trim() || !activeConversationId) return;
+  
+  const messageContent = message.trim();
+  const optimisticId = `temp-${Date.now()}`;
+  const timestamp = new Date().toISOString();
+  
+  setMessage('');
+  
+  // Optimistic UI update
+  const optimisticMessage = {
+    __typename: 'Message',
+    id: optimisticId,
+    content: messageContent,
+    sender: { __typename: 'User', id: currentUserId, firstName: 'You', lastName: '', avatar: '' },
+    readBy: [{
+      __typename: 'MessageRead',
+      id: `read-${optimisticId}`,
+      user: { __typename: 'User', id: currentUserId, firstName: 'You', lastName: '', avatar: '' },
+      readAt: timestamp
+    }],
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    type: 'TEXT',
+    conversationId: activeConversationId,
+    deletedFor: [],
+    isOptimistic: true
+  };
+  
+  // Update cache immediately with optimistic message
+  try {
     const currentMessages = client.readQuery({
       query: GET_MESSAGES,
       variables: { conversationId: activeConversationId }
@@ -395,85 +449,127 @@ const handleNewMessage = (data: { type: string; payload: any }) => {
       variables: { conversationId: activeConversationId },
       data: { getMessages: [...currentMessages, optimisticMessage] }
     });
-    
-    try {
-      const response = await sendMessage({
-        variables: {
-          input: {
-            conversationId: activeConversationId,
-            content: messageContent
-          }
-        }
-      });
-      
-      if (socket && isConnected) {
-        const participants = conversationsData?.getConversations
-          .find((c: any) => c.id === activeConversationId)?.participants || [];
-        
-        const receiverIds = participants
-          .filter((p: any) => p.user.id !== currentUserId)
-          .map((p: any) => p.user.id);
-        
-        socket.emit('message', {
-          ...response.data.sendMessage,
-          receivers: receiverIds,
-          conversationId: activeConversationId
-        });
-      }
-      
-      client.writeQuery({
-        query: GET_MESSAGES,
-        variables: { conversationId: activeConversationId },
-        data: {
-          getMessages: [
-            ...currentMessages.filter((msg: any) => msg.id !== optimisticId),
-            response.data.sendMessage
-          ]
-        }
-      });
-    } catch (error) {
-      console.error('Error sending message:', error);
-      client.writeQuery({
-        query: GET_MESSAGES,
-        variables: { conversationId: activeConversationId },
-        data: { getMessages: currentMessages.filter((msg: any) => msg.id !== optimisticId) }
-      });
-    }
-  };
-const handleDeleteMessage = async () => {
-  if (!messageToDelete) return;
+  } catch (err) {
+    console.error("Error writing optimistic message to cache:", err);
+  }
+  
+  setReceivedMessages(prev => [...prev, optimisticMessage]);
   
   try {
-    const response = await deleteMessageMutation({
-      variables: { messageId: messageToDelete }
+    const response = await sendMessage({
+      variables: {
+        input: {
+          conversationId: activeConversationId,
+          content: messageContent
+        }
+      }
     });
     
-    if (response.data?.deleteMessage?.success) {
-      // Remove message from local cache
+    // Replace optimistic message with server response in cache
+    try {
       const currentMessages = client.readQuery({
         query: GET_MESSAGES,
         variables: { conversationId: activeConversationId }
       })?.getMessages || [];
       
-      const updatedMessages = currentMessages.filter((msg: any) => msg.id !== messageToDelete);
+      const updatedMessages = currentMessages.map((msg: { id: string; }) => 
+        msg.id === optimisticId ? response.data.sendMessage : msg
+      );
       
       client.writeQuery({
         query: GET_MESSAGES,
         variables: { conversationId: activeConversationId },
         data: { getMessages: updatedMessages }
       });
+    } catch (err) {
+      console.error("Error updating cache with server response:", err);
+    }
+    
+    // Replace in receivedMessages
+    setReceivedMessages(prev => [
+      ...prev.filter(msg => msg.id !== optimisticId),
+      response.data.sendMessage
+    ]);
+
+    if (socket && isConnected) {
+      const participants = conversationsData?.getConversations
+        .find((c: any) => c.id === activeConversationId)?.participants || [];
       
-      // Also remove from received messages state
-      setReceivedMessages(prev => prev.filter(msg => msg.id !== messageToDelete));
+      const receiverIds = participants
+        .filter((p: any) => p.user.id !== currentUserId)
+        .map((p: any) => p.user.id);
       
-      // Emit socket event to notify other participants
+      socket.emit('message', {
+        ...response.data.sendMessage,
+        receivers: receiverIds,
+        conversationId: activeConversationId
+      });
+    }
+  } catch (error) {
+    console.error('Error sending message:', error);
+    // Remove optimistic message if send fails
+    try {
+      const currentMessages = client.readQuery({
+        query: GET_MESSAGES,
+        variables: { conversationId: activeConversationId }
+      })?.getMessages || [];
+      
+      const updatedMessages = currentMessages.filter((msg: { id: string; }) => msg.id !== optimisticId);
+      
+      client.writeQuery({
+        query: GET_MESSAGES,
+        variables: { conversationId: activeConversationId },
+        data: { getMessages: updatedMessages }
+      });
+    } catch (err) {
+      console.error("Error removing optimistic message from cache:", err);
+    }
+    
+    setReceivedMessages(prev => prev.filter(msg => msg.id !== optimisticId));
+  }
+};
+const handleDeleteMessage = async (messageId: string, deleteType: 'DELETE_FOR_EVERYONE' | 'DELETE_FOR_ME') => {
+  if (!messageId) return;
+  
+  try {
+    const response = await deleteMessageMutation({
+      variables: { 
+        input: {
+          messageId,
+          deleteType
+        } 
+      }
+    });
+    
+    if (response.data?.deleteMessage?.success) {
+      // Always remove from local state
+      setReceivedMessages(prev => prev.filter(msg => msg.id !== messageId));
+      
+      // For "DELETE_FOR_EVERYONE", update the cache
+      if (deleteType === 'DELETE_FOR_EVERYONE') {
+        const currentMessages = client.readQuery({
+          query: GET_MESSAGES,
+          variables: { conversationId: activeConversationId }
+        })?.getMessages || [];
+        
+        const updatedMessages = currentMessages.filter((msg: any) => msg.id !== messageId);
+        
+        client.writeQuery({
+          query: GET_MESSAGES,
+          variables: { conversationId: activeConversationId },
+          data: { getMessages: updatedMessages }
+        });
+      }
+
+      // Emit socket event
       if (socket && isConnected) {
         socket.emit('message', {
           type: 'MESSAGE_DELETED',
           payload: {
-            messageId: messageToDelete,
+            messageId,
             conversationId: activeConversationId,
-            senderId: currentUserId
+            senderId: currentUserId,
+            deleteType
           }
         });
       }
@@ -1224,61 +1320,93 @@ const convertFileToBase64 = (file: File): Promise<string> => {
                 </div>
               </div>
             ) : (
-           <div className="space-y-4">
+         <div className="space-y-4">
   {allMessages.map((msg: any) => (
     <div
       key={msg.id}
       className={`flex ${msg.sender.id === currentUserId ? 'justify-end' : 'justify-start'}`}
     >
-      <div className="relative group">
-        <div
-          className={`max-w-xs lg:max-w-md px-4 py-2 rounded-lg ${
-            msg.sender.id === currentUserId
-              ? 'bg-indigo-600 text-white rounded-br-none'
-              : 'bg-white text-gray-800 rounded-bl-none border border-gray-200'
-          }`}
+     {/* In your message rendering component */}
+<div className="relative group">
+  <div
+    className={`max-w-xs lg:max-w-md px-4 py-2 rounded-lg ${
+      msg.sender.id === currentUserId
+        ? 'bg-indigo-600 text-white rounded-br-none'
+        : 'bg-white text-gray-800 rounded-bl-none border border-gray-200'
+    }`}
+  >
+    {/* Message content */}
+    {!msg.deletedFor?.includes(currentUserId) ? (
+      <>
+        <p>{msg.content}</p>
+        <p className={`text-xs mt-1 ${
+          msg.sender.id === currentUserId 
+            ? 'text-indigo-200' 
+            : 'text-gray-500'
+        }`}>
+          {formatTimestamp(msg.createdAt)}
+          {msg.sender.id === currentUserId && (
+            <span className="ml-1">
+              {msg.readBy?.length > 1 ? (
+                <FaCheckCircle className="inline text-blue-300" />
+              ) : (
+                <FaCheck className="inline" />
+              )}
+            </span>
+          )}
+        </p>
+      </>
+    ) : (
+      <p className="italic text-gray-500 text-sm">Message deleted</p>
+    )}
+  </div>
+
+  {/* Dropdown button - show for all messages not deleted for me */}
+  {!msg.deletedFor?.includes(currentUserId) && (
+    <div className="absolute top-0 right-0 transform translate-x-2 -translate-y-2">
+      <button
+        onClick={() => setOpenDropdownId(openDropdownId === msg.id ? null : msg.id)}
+        className="p-1 rounded-full opacity-0 group-hover:opacity-100 transition-opacity bg-gray-200 hover:bg-gray-300 text-gray-600"
+        title="Message options"
+      >
+        <FaChevronDown className="w-3 h-3" />
+      </button>
+      
+   {openDropdownId === msg.id && (
+  <div className="absolute right-0 top-8 bg-white border border-gray-200 rounded-lg shadow-lg py-1 z-10 min-w-[120px]">
+    {msg.sender.id === currentUserId ? (
+      <>
+        <button
+          onClick={() => {
+            setMessageToDelete(msg.id);
+            setShowDeleteConfirmMessage(true);
+            setOpenDropdownId(null);
+          }}
+          className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 flex items-center"
         >
-          <p>{msg.content}</p>
-          <p className={`text-xs mt-1 ${
-            msg.sender.id === currentUserId 
-              ? 'text-indigo-200' 
-              : 'text-gray-500'
-          }`}>
-            {formatTimestamp(msg.createdAt)}
-            {msg.sender.id === currentUserId && (
-              <span className="ml-1">
-                {msg.readBy?.length > 1 ? (
-                  <FaCheckCircle className="inline text-blue-300" />
-                ) : (
-                  <FaCheck className="inline" />
-                )}
-              </span>
-            )}
-          </p>
-        </div>
-        
-        {/* Delete button - only show for user's own messages */}
-        {msg.sender.id === currentUserId && (
-          <button
-            onClick={() => {
-              setMessageToDelete(msg.id);
-              setShowDeleteConfirmMessage(true);
-            }}
-            className={`absolute top-0 right-0 transform translate-x-2 -translate-y-2 p-1 rounded-full opacity-0 group-hover:opacity-100 transition-opacity ${
-              msg.sender.id === currentUserId
-                ? 'bg-red-500 hover:bg-red-600 text-white'
-                : 'bg-gray-200 hover:bg-gray-300 text-gray-600'
-            }`}
-            title="Delete message"
-          >
-            <FaTimes className="w-3 h-3" />
-          </button>
-        )}
-      </div>
+          <FaTrash className="w-3 h-3 mr-2" />
+          Delete
+        </button>
+      </>
+    ) : (
+      <button
+        onClick={() => handleDeleteMessage(msg.id, 'DELETE_FOR_ME')}
+        className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 flex items-center"
+      >
+        <FaTrash className="w-3 h-3 mr-2" />
+        Delete for me
+      </button>
+    )}
+  </div>
+)}
+    </div>
+  )}
+</div>
     </div>
   ))}
   <div ref={messagesEndRef} />
 </div>
+
             )}
           </div>
           
@@ -1382,14 +1510,34 @@ const convertFileToBase64 = (file: File): Promise<string> => {
           </div>
         </div>
       )}
-      {showDeleteConfirmMessage && (
+{showDeleteConfirmMessage && (
   <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
     <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-sm">
       <h3 className="text-lg font-bold text-gray-800 mb-4">Delete Message</h3>
       <p className="text-gray-600 mb-6">
-        Are you sure you want to delete this message? This action cannot be undone.
+        How would you like to delete this message?
       </p>
-      <div className="flex justify-end space-x-2">
+      <div className="space-y-2 mb-6">
+        <button
+          onClick={() => {
+            handleDeleteMessage(messageToDelete!, 'DELETE_FOR_EVERYONE');
+            setShowDeleteConfirmMessage(false);
+          }}
+          className="w-full px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 text-left"
+        >
+          Delete for everyone
+        </button>
+        <button
+          onClick={() => {
+            handleDeleteMessage(messageToDelete!, 'DELETE_FOR_ME');
+            setShowDeleteConfirmMessage(false);
+          }}
+          className="w-full px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 text-left"
+        >
+          Delete just for me
+        </button>
+      </div>
+      <div className="flex justify-end">
         <button
           onClick={() => {
             setShowDeleteConfirmMessage(false);
@@ -1398,12 +1546,6 @@ const convertFileToBase64 = (file: File): Promise<string> => {
           className="px-4 py-2 text-gray-600 hover:text-gray-800"
         >
           Cancel
-        </button>
-        <button
-          onClick={handleDeleteMessage}
-          className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600"
-        >
-          Delete
         </button>
       </div>
     </div>

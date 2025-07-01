@@ -56,6 +56,8 @@ export const GET_MESSAGES = gql`
       }
       createdAt
       type
+      conversationId
+      deletedFor
     }
   }
 `;
@@ -82,12 +84,14 @@ export const SEND_MESSAGE = gql`
     }
   }
 `;
+// Add to your mutations file
 export const DELETE_MESSAGE = gql`
-  mutation DeleteMessage($messageId: String!) {
-    deleteMessage(messageId: $messageId) {
+  mutation DeleteMessage($input: DeleteMessageInput!) {
+    deleteMessage(input: $input) {
       success
       messageId
       conversationId
+      deleteType
     }
   }
 `;
