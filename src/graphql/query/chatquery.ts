@@ -282,3 +282,29 @@ export const DELETE_GROUP = gql`
     deleteGroup(groupId: $groupId)
   }
 `;
+// Add to src/graphql/operations/chat.ts
+export const UPDATE_MESSAGE = gql`
+  mutation UpdateMessage($input: UpdateMessageInput!) {
+    updateMessage(input: $input) {
+      id
+      content
+      sender {
+        id
+        firstName
+        lastName
+        avatar
+      }
+      readBy {
+        id
+        user {
+          id
+        }
+      }
+      createdAt
+      updatedAt
+      type
+      conversationId
+      deletedFor
+    }
+  }
+`;

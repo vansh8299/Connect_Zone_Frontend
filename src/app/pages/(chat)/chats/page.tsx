@@ -17,13 +17,15 @@ import {
   REMOVE_GROUP_PARTICIPANT,
   LEAVE_GROUP,
   DELETE_GROUP,
-  DELETE_MESSAGE
+  DELETE_MESSAGE,
+  UPDATE_MESSAGE
 } from '@/graphql/query/chatquery';
 import { GET_USER_BY_ID } from '@/graphql/query/query';
 import { FaPaperclip, FaSmile, FaPaperPlane, FaPhone, FaVideo, FaInfoCircle, FaEllipsisV, FaCheckCircle, FaTimes, FaUsers, FaEdit, FaUserPlus, FaCheck, FaTrash, FaSignOutAlt, FaCamera, FaChevronDown, FaUser } from 'react-icons/fa';
 import { useSocket } from '@/utils/SocketContext';
 import CreateGroupModal from '@/components/groupmodal';
 import { useRouter } from 'next/navigation';
+import { SeenByList } from '@/utils/components/seenbylist';
 
 export default function ChatPage() {
   // State
@@ -48,6 +50,8 @@ export default function ChatPage() {
 const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
 const [showDeleteConfirmMessage, setShowDeleteConfirmMessage] = useState(false);
 const [messageToDelete, setMessageToDelete] = useState<string | null>(null);
+const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+const [editedMessageContent, setEditedMessageContent] = useState('');
 
 const router = useRouter()
   // Refs
@@ -151,6 +155,7 @@ const router = useRouter()
 
   // Mutations
   const [sendMessage] = useMutation(SEND_MESSAGE);
+  const [updateMessage] = useMutation(UPDATE_MESSAGE);
   const [createConversation] = useMutation(CREATE_CONVERSATION);
   const [updateGroup] = useMutation(UPDATE_GROUP);
   const [addGroupParticipants] = useMutation(ADD_GROUP_PARTICIPANTS);
@@ -165,7 +170,58 @@ const [deleteMessageMutation] = useMutation(DELETE_MESSAGE);
 
   // Check if current user is admin of the group
   const isGroupAdmin = groupDetails?.creator?.id === currentUserId;
+const handleUpdateMessage = async () => {
+  if (!editingMessageId || !editedMessageContent.trim()) return;
 
+  try {
+    const response = await updateMessage({
+      variables: {
+        input: {
+          messageId: editingMessageId,
+          newContent: editedMessageContent.trim()
+        }
+      }
+    });
+
+    if (response.data?.updateMessage) {
+      // Update the cache
+      const currentMessages = client.readQuery({
+        query: GET_MESSAGES,
+        variables: { conversationId: activeConversationId }
+      })?.getMessages || [];
+
+      const updatedMessages = currentMessages.map((msg: any) => 
+        msg.id === editingMessageId ? response.data.updateMessage : msg
+      );
+
+      client.writeQuery({
+        query: GET_MESSAGES,
+        variables: { conversationId: activeConversationId },
+        data: { getMessages: updatedMessages }
+      });
+
+      // Update received messages state
+      setReceivedMessages(prev => 
+        prev.map(msg => 
+          msg.id === editingMessageId ? response.data.updateMessage : msg
+        )
+      );
+
+      // Emit socket event
+      if (socket && isConnected) {
+        socket.emit('message', {
+          type: 'MESSAGE_UPDATED',
+          payload: response.data.updateMessage
+        });
+      }
+    }
+  } catch (error) {
+    console.error('Error updating message:', error);
+  } finally {
+    setEditingMessageId(null);
+    setEditedMessageContent('');
+  }
+};
   // Socket message handling
   useEffect(() => {
     if (!socket) return;
@@ -209,7 +265,38 @@ const handleNewMessage = (data: { type: string; payload: any }) => {
     
     // Always refetch conversations to update the last message preview
     client.refetchQueries({ include: [GET_CONVERSATIONS] });
-  }else if (data.type === 'MESSAGE_DELETED') {
+  }
+   else if (data.type === 'MESSAGE_UPDATED') {
+    const updatedMessage = data.payload;
+    
+    // Update received messages
+    setReceivedMessages(prev => 
+      prev.map(msg => msg.id === updatedMessage.id ? updatedMessage : msg)
+    );
+    
+    // Update cache if it's the active conversation
+    if (updatedMessage.conversationId === activeConversationId) {
+      try {
+        const currentMessages = client.readQuery({
+          query: GET_MESSAGES,
+          variables: { conversationId: activeConversationId }
+        })?.getMessages || [];
+        
+        const updatedMessages = currentMessages.map((msg: any) => 
+          msg.id === updatedMessage.id ? updatedMessage : msg
+        );
+        
+        client.writeQuery({
+          query: GET_MESSAGES,
+          variables: { conversationId: activeConversationId },
+          data: { getMessages: updatedMessages }
+        });
+      } catch (err) {
+        console.error("Error updating cache for edited message:", err);
+      }
+    }
+  }
+  else if (data.type === 'MESSAGE_DELETED') {
     const { messageId, conversationId, deleteType, senderId } = data.payload;
     
     // For "DELETE_FOR_ME", only update if it's for the current user
@@ -355,17 +442,33 @@ const allMessages = useMemo(() => {
 
   // Helper functions
 const formatTimestamp = (timestamp: string | number | Date) => {
-  if (!timestamp) return '';
+  if (!timestamp) return 'Just now';
   
   try {
-    // Handle both string timestamps and Date objects
-    const date = timestamp instanceof Date ? timestamp : new Date(timestamp);
+    // Convert to number if it's a string representation of milliseconds
+    const timestampNum = typeof timestamp === 'string' 
+      ? /^\d+$/.test(timestamp) 
+        ? parseInt(timestamp) 
+        : timestamp
+      : timestamp;
+
+    const date = timestampNum instanceof Date 
+      ? timestampNum 
+      : new Date(timestampNum);
     
-    // Check if the date is valid
-    if (isNaN(date.getTime())) {
-      return '';
-    }
+    // If date is invalid, return fallback
+    if (isNaN(date.getTime())) return 'Just now';
     
+    // Calculate time difference
+    const now = new Date();
+    const diffInMinutes = Math.floor((now.getTime() - date.getTime()) / (1000 * 60));
+    
+    // Show relative time for recent messages
+    if (diffInMinutes < 1) return 'Just now';
+    if (diffInMinutes < 60) return `${diffInMinutes}m ago`;
+    if (diffInMinutes < 24 * 60) return `${Math.floor(diffInMinutes / 60)}h ago`;
+    
+    // Show full time for older messages
     return date.toLocaleTimeString([], { 
       hour: '2-digit', 
       minute: '2-digit',
@@ -373,7 +476,7 @@ const formatTimestamp = (timestamp: string | number | Date) => {
     });
   } catch (error) {
     console.error('Error formatting timestamp:', error);
-    return '';
+    return 'Just now';
   }
 };
   
@@ -1320,88 +1423,130 @@ const convertFileToBase64 = (file: File): Promise<string> => {
                 </div>
               </div>
             ) : (
-         <div className="space-y-4">
+        <div className="space-y-4">
   {allMessages.map((msg: any) => (
     <div
       key={msg.id}
       className={`flex ${msg.sender.id === currentUserId ? 'justify-end' : 'justify-start'}`}
     >
-     {/* In your message rendering component */}
-<div className="relative group">
-  <div
-    className={`max-w-xs lg:max-w-md px-4 py-2 rounded-lg ${
-      msg.sender.id === currentUserId
-        ? 'bg-indigo-600 text-white rounded-br-none'
-        : 'bg-white text-gray-800 rounded-bl-none border border-gray-200'
-    }`}
-  >
-    {/* Message content */}
-    {!msg.deletedFor?.includes(currentUserId) ? (
-      <>
-        <p>{msg.content}</p>
-        <p className={`text-xs mt-1 ${
-          msg.sender.id === currentUserId 
-            ? 'text-indigo-200' 
-            : 'text-gray-500'
-        }`}>
-          {formatTimestamp(msg.createdAt)}
-          {msg.sender.id === currentUserId && (
-            <span className="ml-1">
-              {msg.readBy?.length > 1 ? (
-                <FaCheckCircle className="inline text-blue-300" />
-              ) : (
-                <FaCheck className="inline" />
-              )}
-            </span>
-          )}
-        </p>
-      </>
+      <div className="relative group">
+        {editingMessageId === msg.id ? (
+          <div className="bg-white p-2 rounded-lg shadow-md w-full max-w-md">
+            <textarea
+              value={editedMessageContent}
+              onChange={(e) => setEditedMessageContent(e.target.value)}
+              className="w-full p-2 border rounded mb-2"
+              autoFocus
+            />
+            <div className="flex justify-end space-x-2">
+              <button
+                onClick={() => {
+                  setEditingMessageId(null);
+                  setEditedMessageContent('');
+                }}
+                className="px-3 py-1 text-gray-600 hover:text-gray-800 text-sm"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleUpdateMessage}
+                className="px-3 py-1 bg-indigo-600 text-white rounded hover:bg-indigo-700 text-sm"
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        ) : (
+       <div className={`max-w-xs lg:max-w-md px-4 py-2 rounded-lg ${
+  msg.sender.id === currentUserId
+    ? 'bg-indigo-600 text-white rounded-br-none'
+    : 'bg-white text-gray-800 rounded-bl-none border border-gray-200'
+}`}>
+  {!msg.deletedFor?.includes(currentUserId) ? (
+    <>
+      <p>{msg.content}</p>
+     <p className={`text-xs mt-1 ${msg.sender.id === currentUserId ? 'text-indigo-200' : 'text-gray-500'}`}>
+  {msg.createdAt ? formatTimestamp(msg.createdAt) : 'Just now'}
+  {msg.updatedAt && msg.updatedAt !== msg.createdAt && ' (edited)'}
+{msg.sender.id === currentUserId && (
+  <span className="ml-1">
+    {msg.readBy?.length > 0 ? (
+      <span className="relative">
+        <FaCheck className="inline" />
+        <FaCheck className="inline absolute left-1" style={{ color: msg.readBy.length > 0 ? '#3b82f6' : '' }} />
+      </span>
     ) : (
-      <p className="italic text-gray-500 text-sm">Message deleted</p>
+      <FaCheck className="inline" />
     )}
-  </div>
-
-  {/* Dropdown button - show for all messages not deleted for me */}
-  {!msg.deletedFor?.includes(currentUserId) && (
-    <div className="absolute top-0 right-0 transform translate-x-2 -translate-y-2">
-      <button
-        onClick={() => setOpenDropdownId(openDropdownId === msg.id ? null : msg.id)}
-        className="p-1 rounded-full opacity-0 group-hover:opacity-100 transition-opacity bg-gray-200 hover:bg-gray-300 text-gray-600"
-        title="Message options"
-      >
-        <FaChevronDown className="w-3 h-3" />
-      </button>
-      
-   {openDropdownId === msg.id && (
-  <div className="absolute right-0 top-8 bg-white border border-gray-200 rounded-lg shadow-lg py-1 z-10 min-w-[120px]">
-    {msg.sender.id === currentUserId ? (
-      <>
-        <button
-          onClick={() => {
-            setMessageToDelete(msg.id);
-            setShowDeleteConfirmMessage(true);
-            setOpenDropdownId(null);
-          }}
-          className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 flex items-center"
-        >
-          <FaTrash className="w-3 h-3 mr-2" />
-          Delete
-        </button>
-      </>
-    ) : (
-      <button
-        onClick={() => handleDeleteMessage(msg.id, 'DELETE_FOR_ME')}
-        className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 flex items-center"
-      >
-        <FaTrash className="w-3 h-3 mr-2" />
-        Delete for me
-      </button>
-    )}
-  </div>
+  </span>
 )}
-    </div>
+</p>
+    </>
+  ) : (
+    <p className="italic text-gray-500 text-sm">Message deleted</p>
   )}
 </div>
+        )}
+
+        {!msg.deletedFor?.includes(currentUserId) && editingMessageId !== msg.id && (
+          <div className="absolute top-0 right-0 transform translate-x-2 -translate-y-2">
+            <button
+              onClick={() => setOpenDropdownId(openDropdownId === msg.id ? null : msg.id)}
+              className="p-1 rounded-full opacity-0 group-hover:opacity-100 transition-opacity bg-gray-200 hover:bg-gray-300 text-gray-600"
+              title="Message options"
+            >
+              <FaChevronDown className="w-3 h-3" />
+            </button>
+            
+            {openDropdownId === msg.id && (
+              <div className="absolute right-0 top-8 bg-white border border-gray-200 rounded-lg shadow-lg py-1 z-10 min-w-[120px]">
+           
+{activeConversation?.isGroup && (
+  <SeenByList 
+    message={msg} 
+    currentUserId={currentUserId || ''}
+    participants={activeConversation.participants}
+  />
+)}
+                {msg.sender.id === currentUserId ? (
+                  <>
+                    <button
+                      onClick={() => {
+                        setEditingMessageId(msg.id);
+                        setEditedMessageContent(msg.content);
+                        setOpenDropdownId(null);
+                      }}
+                      className="w-full text-left px-4 py-2 text-sm text-indigo-600 hover:bg-indigo-50 flex items-center"
+                    >
+                      <FaEdit className="w-3 h-3 mr-2" />
+                      Edit
+                    </button>
+                    <button
+                      onClick={() => {
+                        setMessageToDelete(msg.id);
+                        setShowDeleteConfirmMessage(true);
+                        setOpenDropdownId(null);
+                      }}
+                      className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 flex items-center"
+                    >
+                      <FaTrash className="w-3 h-3 mr-2" />
+                      Delete
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    onClick={() => handleDeleteMessage(msg.id, 'DELETE_FOR_ME')}
+                    className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 flex items-center"
+                  >
+                    <FaTrash className="w-3 h-3 mr-2" />
+                    Delete for me
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   ))}
   <div ref={messagesEndRef} />
