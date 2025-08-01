@@ -1,31 +1,15 @@
-// src/app/chat/page.tsx
 'use client';
 
-import { useState, useEffect, useRef, useMemo } from 'react';
-import { useQuery, useMutation, useLazyQuery, useApolloClient } from '@apollo/client';
-import { getCookie } from 'cookies-next';
-import { 
-  GET_CONVERSATIONS, 
-  GET_MESSAGES, 
-  SEND_MESSAGE, 
-  CREATE_CONVERSATION, 
-  GET_USER_BY_EMAIL, 
-  SEARCH_USERS,
-  GET_GROUP,
-  UPDATE_GROUP,
-  ADD_GROUP_PARTICIPANTS,
-  REMOVE_GROUP_PARTICIPANT,
-  LEAVE_GROUP,
-  DELETE_GROUP,
-  DELETE_MESSAGE,
-  UPDATE_MESSAGE
-} from '@/graphql/query/chatquery';
-import { GET_USER_BY_ID } from '@/graphql/query/query';
-import { FaPaperclip, FaSmile, FaPaperPlane, FaPhone, FaVideo, FaInfoCircle, FaEllipsisV, FaCheckCircle, FaTimes, FaUsers, FaEdit, FaUserPlus, FaCheck, FaTrash, FaSignOutAlt, FaCamera, FaChevronDown, FaUser } from 'react-icons/fa';
-import { useSocket } from '@/utils/SocketContext';
-import CreateGroupModal from '@/components/groupmodal';
-import { useRouter } from 'next/navigation';
-import { SeenByList } from '@/utils/components/seenbylist';
+import CreateGroupModal from "@/components/groupmodal";
+import { GET_CONVERSATIONS, GET_GROUP, SEARCH_USERS, GET_MESSAGES, GET_USER_BY_EMAIL, SEND_MESSAGE, UPDATE_MESSAGE, CREATE_CONVERSATION, UPDATE_GROUP, ADD_GROUP_PARTICIPANTS, REMOVE_GROUP_PARTICIPANT, LEAVE_GROUP, DELETE_GROUP, DELETE_MESSAGE } from "@/graphql/query/chatquery";
+import { GET_USER_BY_ID } from "@/graphql/query/query";
+import { SeenByList } from "@/utils/components/seenbylist";
+import { useSocket } from "@/utils/SocketContext";
+import { useApolloClient, useQuery, useLazyQuery, useMutation } from "@apollo/client";
+import { getCookie } from "cookies-next";
+import { useRouter } from "next/navigation";
+import { useState, useRef, useEffect, useMemo } from "react";
+import { FaCamera, FaCheck, FaCheckCircle, FaChevronDown, FaEdit, FaEllipsisV, FaInfoCircle, FaPaperclip, FaPaperPlane, FaPhone, FaSmile, FaTimes, FaTrash, FaUserPlus, FaUsers, FaVideo } from "react-icons/fa";
 
 export default function ChatPage() {
   // State
@@ -228,12 +212,22 @@ const handleUpdateMessage = async () => {
       
 // In your useEffect for socket messages
 const handleNewMessage = (data: { type: string; payload: any }) => {
-  if (data.type === 'NEW_MESSAGE') {
+   if (data.type === 'NEW_MESSAGE') {
     const newMessage = data.payload;
           
     if (!newMessage || !newMessage.conversationId) return;
     
-    // Remove the sender check - we want to handle all new messages
+    // Skip if this is our own message (we already handled it optimistically)
+    if (newMessage.sender.id === currentUserId) {
+      // Just update the optimistic message with the server version
+      setReceivedMessages(prev => {
+        const filtered = prev.filter(msg => msg.id !== newMessage.id && !msg.isOptimistic);
+        return [...filtered, newMessage];
+      });
+      return;
+    }
+    
+    // For messages from others
     setReceivedMessages(prev => {
       // Remove any existing message with same ID (shouldn't happen but just in case)
       const filtered = prev.filter(msg => msg.id !== newMessage.id);
@@ -540,22 +534,7 @@ const handleSendMessage = async () => {
     isOptimistic: true
   };
   
-  // Update cache immediately with optimistic message
-  try {
-    const currentMessages = client.readQuery({
-      query: GET_MESSAGES,
-      variables: { conversationId: activeConversationId }
-    })?.getMessages || [];
-    
-    client.writeQuery({
-      query: GET_MESSAGES,
-      variables: { conversationId: activeConversationId },
-      data: { getMessages: [...currentMessages, optimisticMessage] }
-    });
-  } catch (err) {
-    console.error("Error writing optimistic message to cache:", err);
-  }
-  
+  // Update receivedMessages immediately with optimistic message
   setReceivedMessages(prev => [...prev, optimisticMessage]);
   
   try {
@@ -568,27 +547,7 @@ const handleSendMessage = async () => {
       }
     });
     
-    // Replace optimistic message with server response in cache
-    try {
-      const currentMessages = client.readQuery({
-        query: GET_MESSAGES,
-        variables: { conversationId: activeConversationId }
-      })?.getMessages || [];
-      
-      const updatedMessages = currentMessages.map((msg: { id: string; }) => 
-        msg.id === optimisticId ? response.data.sendMessage : msg
-      );
-      
-      client.writeQuery({
-        query: GET_MESSAGES,
-        variables: { conversationId: activeConversationId },
-        data: { getMessages: updatedMessages }
-      });
-    } catch (err) {
-      console.error("Error updating cache with server response:", err);
-    }
-    
-    // Replace in receivedMessages
+    // Replace optimistic message with server response in receivedMessages
     setReceivedMessages(prev => [
       ...prev.filter(msg => msg.id !== optimisticId),
       response.data.sendMessage
@@ -603,31 +562,17 @@ const handleSendMessage = async () => {
         .map((p: any) => p.user.id);
       
       socket.emit('message', {
-        ...response.data.sendMessage,
-        receivers: receiverIds,
-        conversationId: activeConversationId
+        type: 'NEW_MESSAGE',
+        payload: {
+          ...response.data.sendMessage,
+          receivers: receiverIds,
+          conversationId: activeConversationId
+        }
       });
     }
   } catch (error) {
     console.error('Error sending message:', error);
     // Remove optimistic message if send fails
-    try {
-      const currentMessages = client.readQuery({
-        query: GET_MESSAGES,
-        variables: { conversationId: activeConversationId }
-      })?.getMessages || [];
-      
-      const updatedMessages = currentMessages.filter((msg: { id: string; }) => msg.id !== optimisticId);
-      
-      client.writeQuery({
-        query: GET_MESSAGES,
-        variables: { conversationId: activeConversationId },
-        data: { getMessages: updatedMessages }
-      });
-    } catch (err) {
-      console.error("Error removing optimistic message from cache:", err);
-    }
-    
     setReceivedMessages(prev => prev.filter(msg => msg.id !== optimisticId));
   }
 };
