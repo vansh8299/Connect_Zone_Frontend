@@ -3,10 +3,12 @@
 
 import { ApolloProvider, ApolloClient, InMemoryCache, createHttpLink } from "@apollo/client";
 import { setContext } from "@apollo/client/link/context";
-import { ReactNode, useEffect, useState } from "react";
+import { Component, ReactNode, useEffect, useState } from "react";
 import { getCookie } from 'cookies-next';
 
-export default function ApolloWrapper({ children }: { children: ReactNode }) {
+import { UserProvider } from "@/context/UserContext";
+
+export default function ApolloWrapper({ children }: { children: ReactNode },{ Component, pageProps }: any) {
   const [client, setClient] = useState<ApolloClient<any> | null>(null);
 
   useEffect(() => {
@@ -45,8 +47,10 @@ export default function ApolloWrapper({ children }: { children: ReactNode }) {
   }
 
   return (
-    <ApolloProvider client={client}>
-      {children}
+   <ApolloProvider client={client}>
+      <UserProvider>
+        <Component {...pageProps} />
+      </UserProvider>
     </ApolloProvider>
   );
 }
