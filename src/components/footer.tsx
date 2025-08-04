@@ -46,7 +46,7 @@ const Footer = () => {
         </Link>
 
         {/* Calls Button */}
-        <Link href="/pages/profile">
+        <Link href="/pages/calls">
           <button className="flex flex-col items-center text-gray-600 hover:text-green-600 transition-colors">
             <span className="w-6 h-6 mb-1">
               <FaPhone />

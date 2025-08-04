@@ -1,7 +1,9 @@
+'use client';
+
 import { useQuery, useSubscription } from '@apollo/client';
 import { gql } from '@apollo/client';
 import { useState } from 'react';
-import { useRouter } from 'next/router';
+import { useRouter } from 'next/navigation';
 import { useUser } from '@/context/UserContext';
 import CallItem from '@/components/CallItem';
 import UserSearch from '@/components/UserSearch';
@@ -22,7 +24,7 @@ export default function CallHistory() {
         // Show incoming call notification
         const call = data.data.callInitiated.call;
         if (confirm(`Incoming call from ${call.caller.firstName} ${call.caller.lastName}. Answer?`)) {
-          router.push(`/call/${call.id}`);
+          router.push(`/pages/calls/${call.id}`);
         }
       }
       refetch();
@@ -40,7 +42,7 @@ export default function CallHistory() {
         <UserSearch 
           onSelectUser={(selectedUser) => {
             // Start a call with the selected user
-            router.push(`/call/new?receiverId=${selectedUser.id}`);
+            router.push(`/pages/calls/new?receiverId=${selectedUser.id}`);
           }}
         />
       </div>
@@ -51,7 +53,7 @@ export default function CallHistory() {
             key={call.id} 
             call={call} 
             currentUserId={user?.id}
-            onClick={() => router.push(`/call/${call.id}`)}
+            onClick={() => router.push(`/pages/calls/${call.id}`)}
           />
         ))}
       </div>

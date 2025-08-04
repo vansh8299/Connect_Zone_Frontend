@@ -24,6 +24,18 @@ export const GET_CALL_HISTORY = gql`
   }
 `;
 
+export const GET_CURRENT_USER = gql`
+  query GetCurrentUser {
+    currentUser {
+      id
+      firstName
+      lastName
+      email
+      avatar
+    }
+  }
+`;
+
 export const CALL_INITIATED_SUBSCRIPTION = gql`
   subscription OnCallInitiated {
     callInitiated {
@@ -47,6 +59,7 @@ export const CALL_INITIATED_SUBSCRIPTION = gql`
     }
   }
 `;
+
 export const SEARCH_USERS = gql`
   query SearchUsers($searchTerm: String!) {
     searchUsers(searchTerm: $searchTerm) {
@@ -57,7 +70,6 @@ export const SEARCH_USERS = gql`
     }
   }
 `;
-
 
 export const GET_CALL = gql`
   query GetCall($id: ID!) {
@@ -107,9 +119,10 @@ export const ADD_ICE_CANDIDATE = gql`
   }
 `;
 
+// FIXED: Added callId parameter to subscriptions that require it
 export const CALL_ANSWERED_SUBSCRIPTION = gql`
-  subscription OnCallAnswered {
-    callAnswered {
+  subscription OnCallAnswered($callId: ID!) {
+    callAnswered(callId: $callId) {
       call {
         id
         status
@@ -119,17 +132,53 @@ export const CALL_ANSWERED_SUBSCRIPTION = gql`
 `;
 
 export const CALL_ENDED_SUBSCRIPTION = gql`
-  subscription OnCallEnded {
-    callEnded {
+  subscription OnCallEnded($callId: ID!) {
+    callEnded(callId: $callId) {
       id
       status
     }
   }
 `;
+// Add this mutation to properly exchange SDP offers
+export const SEND_SDP_OFFER = gql`
+  mutation SendSdpOffer($input: SendSdpOfferInput!) {
+    sendSdpOffer(input: $input) {
+      success
+      call {
+        id
+        status
+      }
+    }
+  }
+`;
 
+export const START_CALL = gql`
+  mutation StartCall($input: StartCallInput!) {
+    startCall(input: $input) {
+      call {
+        id
+        caller {
+          id
+          firstName
+          lastName
+          avatar
+        }
+        receiver {
+          id
+          firstName
+          lastName
+          avatar
+        }
+        status
+        startedAt
+      }
+      sdpOffer
+    }
+  }
+`;
 export const ICE_CANDIDATE_SUBSCRIPTION = gql`
-  subscription OnIceCandidateReceived {
-    iceCandidateReceived {
+  subscription OnIceCandidateReceived($callId: ID!) {
+    iceCandidateReceived(callId: $callId) {
       callId
       candidate
     }

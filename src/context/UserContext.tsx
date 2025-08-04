@@ -1,19 +1,10 @@
 // context/UserContext.tsx
 import { createContext, useContext, useEffect, useState } from 'react';
 import { gql, useQuery } from '@apollo/client';
-import { useRouter } from 'next/router';
+import { useRouter } from 'next/navigation';
+import { GET_CURRENT_USER } from '@/graphql/query/callquery';
 
-const GET_CURRENT_USER = gql`
-  query GetCurrentUser {
-    currentUser {
-      id
-      firstName
-      lastName
-      email
-      avatar
-    }
-  }
-`;
+
 
 const UserContext = createContext<any>(null);
 
@@ -26,8 +17,7 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     if (data?.currentUser) {
       setUser(data.currentUser);
     } else if (error) {
-      // Handle error or redirect to login
-      router.push('/login');
+ 
     }
   }, [data, error, router]);
   

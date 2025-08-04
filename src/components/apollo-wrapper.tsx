@@ -1,14 +1,14 @@
-// src/components/ApolloWrapper.tsx (updated)
+// src/components/ApolloWrapper.tsx (fixed)
 'use client';
 
 import { ApolloProvider, ApolloClient, InMemoryCache, createHttpLink } from "@apollo/client";
 import { setContext } from "@apollo/client/link/context";
-import { Component, ReactNode, useEffect, useState } from "react";
+import { ReactNode, useEffect, useState } from "react";
 import { getCookie } from 'cookies-next';
 
 import { UserProvider } from "@/context/UserContext";
 
-export default function ApolloWrapper({ children }: { children: ReactNode },{ Component, pageProps }: any) {
+export default function ApolloWrapper({ children }: { children: ReactNode }) {
   const [client, setClient] = useState<ApolloClient<any> | null>(null);
 
   useEffect(() => {
@@ -47,9 +47,9 @@ export default function ApolloWrapper({ children }: { children: ReactNode },{ Co
   }
 
   return (
-   <ApolloProvider client={client}>
+    <ApolloProvider client={client}>
       <UserProvider>
-        <Component {...pageProps} />
+        {children}
       </UserProvider>
     </ApolloProvider>
   );
