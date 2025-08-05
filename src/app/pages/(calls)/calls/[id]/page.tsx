@@ -17,7 +17,7 @@ import {
 
 export default function CallPage() {
   const router = useRouter();
-  const { id } = useParams();
+  const { receiverId } = useParams();
   const { user } = useUser();
   
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
@@ -33,8 +33,8 @@ export default function CallPage() {
   
   // Queries and Mutations
   const { data, loading, error: queryError, refetch } = useQuery(GET_CALL, {
-    variables: { id },
-    skip: !id || isNewCall, // Skip if it's a new call being created
+    variables: { receiverId },
+    skip: !receiverId || isNewCall, // Skip if it's a new call being created
     errorPolicy: 'all',
     fetchPolicy: 'cache-and-network'
   });
@@ -60,18 +60,18 @@ export default function CallPage() {
 
   // Check if this is a new call (when id is actually receiverId)
   useEffect(() => {
-    if (!id || !user) return;
+    if (!receiverId || !user) return;
     
     // If id doesn't look like a call ID (UUID), treat it as receiverId for new call
-    const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id as string);
+    const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(receiverId as string);
     
     if (!isUUID) {
       setIsNewCall(true);
-      handleStartNewCall(id as string);
+      handleStartNewCall(receiverId as string);
     } else {
       setIsNewCall(false);
     }
-  }, [id, user]);
+  }, [receiverId, user]);
 
   // Function to start a new call
   const handleStartNewCall = async (receiverId: string) => {
@@ -101,9 +101,9 @@ export default function CallPage() {
   
   // Initialize WebRTC - only for existing calls, not new ones
   useEffect(() => {
-    if (!id || !user || isInitialized || isNewCall) return;
+    if (!receiverId || !user || isInitialized || isNewCall) return;
     
-    console.log('Initializing WebRTC for call:', id, 'user:', user.id);
+    console.log('Initializing WebRTC for call:', receiverId, 'user:', user.id);
     
     const initWebRTC = async () => {
       try {
@@ -156,7 +156,7 @@ export default function CallPage() {
             addIceCandidate({
               variables: {
                 input: {
-                  callId: id,
+                  callId: receiverId,
                   candidate: JSON.stringify(event.candidate)
                 }
               }
@@ -213,7 +213,7 @@ export default function CallPage() {
         peerConnection.close();
       }
     };
-  }, [id, user, isInitialized, isNewCall, data]);
+  }, [receiverId, user, isInitialized, isNewCall, data]);
 
   // Handle call data when available
   const handleCallData = async (pc: RTCPeerConnection) => {
@@ -256,7 +256,7 @@ export default function CallPage() {
   
   // Subscriptions - only for existing calls
   useSubscription(ICE_CANDIDATE_SUBSCRIPTION, {
-    variables: { callId: id },
+    variables: { callId: receiverId },
     onData: ({ data }) => {
       if (data.data?.iceCandidateReceived && peerConnection) {
         try {
@@ -268,70 +268,77 @@ export default function CallPage() {
         }
       }
     },
-    skip: !id || !peerConnection || isNewCall
+    skip: !receiverId || !peerConnection || isNewCall
   });
   
   useSubscription(CALL_ANSWERED_SUBSCRIPTION, {
-    variables: { callId: id },
+    variables: { callId: receiverId },
     onData: ({ data }) => {
       if (data.data?.callAnswered) {
         console.log('Call answered');
         setCallStatus('connected');
       }
     },
-    skip: !id || isNewCall
+    skip: !receiverId || isNewCall
   });
   
   useSubscription(CALL_ENDED_SUBSCRIPTION, {
-    variables: { callId: id },
+    variables: { callId: receiverId },
     onData: ({ data }) => {
       if (data.data?.callEnded) {
         console.log('Call ended remotely');
         handleEndCall();
       }
     },
-    skip: !id || isNewCall
+    skip: !receiverId || isNewCall
   });
   
-  const handleAnswerCall = async () => {
-    try {
-      if (!peerConnection) {
-        console.error('No peer connection available');
-        return;
-      }
-      
-      console.log('Answering call...');
-      setCallStatus('answering');
-      
-      const answer = await peerConnection.createAnswer();
-      await peerConnection.setLocalDescription(answer);
-      
-      await answerCall({
-        variables: {
-          input: {
-            callId: id,
-            sdpAnswer: JSON.stringify(answer)
-          }
-        }
-      });
-      
-      console.log('Call answered successfully');
-      setCallStatus('connected');
-    } catch (err) {
-      console.error('Error answering call:', err);
-      setError('Failed to answer call');
+ const handleAnswerCall = async () => {
+  try {
+    if (!peerConnection) {
+      console.error('No peer connection available');
+      setError('Call connection not ready yet. Please wait...');
+      return;
     }
-  };
+    
+    if (callStatus !== 'ringing') {
+      console.error('Call is not in ringing state');
+      return;
+    }
+    
+    console.log('Answering call...');
+    setCallStatus('answering');
+    
+    const answer = await peerConnection.createAnswer();
+    await peerConnection.setLocalDescription(answer);
+    
+    await answerCall({
+      variables: {
+        input: {
+          callId: receiverId,
+          sdpAnswer: JSON.stringify(answer)
+        }
+      }
+    });
+    
+    console.log('Call answered successfully');
+    setCallStatus('connected');
+  } catch (err) {
+    console.error('Error answering call:', err);
+    setError('Failed to answer call');
+    setCallStatus('error');
+  }
+};
   
   const handleEndCall = async () => {
     try {
       console.log('Ending call...');
       
-      if (id && !isNewCall) {
+      if (receiverId && !isNewCall) {
         await endCall({
           variables: {
             input: {
-              callId: id
+              callId: receiverId
             }
           }
         });
