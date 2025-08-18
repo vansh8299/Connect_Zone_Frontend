@@ -1,5 +1,5 @@
 'use client';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 import { gql, useMutation, useQuery, useSubscription } from '@apollo/client';
 import { useUser } from '@/context/UserContext';
@@ -12,13 +12,26 @@ import {
   ICE_CANDIDATE_SUBSCRIPTION, 
   CALL_ANSWERED_SUBSCRIPTION, 
   CALL_ENDED_SUBSCRIPTION,
-  START_CALL // Import the START_CALL mutation
+  START_CALL
 } from '@/graphql/query/callquery';
 
 export default function CallPage() {
   const router = useRouter();
-  const { receiverId } = useParams();
+  const params = useParams();
+  const searchParams = useSearchParams();
   const { user } = useUser();
+  
+  const getCallIdOrReceiverId = () => {
+    if (params.id === 'new') {
+      return searchParams.get('receiverId');
+    }
+    return params.id as string;
+  };
+  
+  const callIdOrReceiverId = getCallIdOrReceiverId();
+  console.log('CallPage - callIdOrReceiverId:', callIdOrReceiverId);
+  console.log('Route params:', params);
+  console.log('Search params:', Object.fromEntries(searchParams.entries()));
   
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
@@ -27,24 +40,30 @@ export default function CallPage() {
   const [error, setError] = useState<string | null>(null);
   const [isInitialized, setIsInitialized] = useState(false);
   const [isNewCall, setIsNewCall] = useState(false);
+  const [actualCallId, setActualCallId] = useState<string | null>(null);
   
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   
-  // Queries and Mutations
+  // Determine if this is a UUID (existing call) or receiverId (new call)
+  const isUUID = (str: string) => {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
+  };
+  
+  // Set up queries and mutations based on call type
   const { data, loading, error: queryError, refetch } = useQuery(GET_CALL, {
-    variables: { receiverId },
-    skip: !receiverId || isNewCall, // Skip if it's a new call being created
+    variables: { id: actualCallId || callIdOrReceiverId },
+    skip: !callIdOrReceiverId || isNewCall || (!actualCallId && !isUUID(callIdOrReceiverId || '')),
     errorPolicy: 'all',
     fetchPolicy: 'cache-and-network'
   });
   
+  console.log('Call data:', data);
   const [answerCall] = useMutation(ANSWER_CALL);
   const [endCall] = useMutation(END_CALL);
   const [addIceCandidate] = useMutation(ADD_ICE_CANDIDATE);
-  const [startCall] = useMutation(START_CALL); // Add startCall mutation
+  const [startCall] = useMutation(START_CALL);
 
-  // Enhanced WebRTC configuration
   const rtcConfiguration = {
     iceServers: [
       { urls: "stun:stun.l.google.com:19302" },
@@ -58,58 +77,117 @@ export default function CallPage() {
     iceCandidatePoolSize: 10
   };
 
-  // Check if this is a new call (when id is actually receiverId)
+  // Check if this is a new call or existing call
   useEffect(() => {
-    if (!receiverId || !user) return;
+    if (!callIdOrReceiverId || !user) return;
     
-    // If id doesn't look like a call ID (UUID), treat it as receiverId for new call
-    const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(receiverId as string);
-    
-    if (!isUUID) {
+    // If route is /call/new, this is definitely a new call
+    if (params.id === 'new') {
+      console.log('New call route detected');
       setIsNewCall(true);
-      handleStartNewCall(receiverId as string);
-    } else {
-      setIsNewCall(false);
+      handleStartNewCall(callIdOrReceiverId);
+      return;
     }
-  }, [receiverId, user]);
+    
+    // Check if it's a UUID (existing call) or receiverId (new call)
+    if (isUUID(callIdOrReceiverId)) {
+      console.log('Existing call ID detected:', callIdOrReceiverId);
+      setIsNewCall(false);
+      setActualCallId(callIdOrReceiverId);
+    } else {
+      console.log('Receiver ID detected, starting new call to:', callIdOrReceiverId);
+      setIsNewCall(true);
+      handleStartNewCall(callIdOrReceiverId);
+    }
+  }, [callIdOrReceiverId, user, params.id]);
 
-  // Function to start a new call
   const handleStartNewCall = async (receiverId: string) => {
     try {
-      console.log('Starting new call to user:', receiverId);
-      setCallStatus('initiating');
+      console.log('=== Starting new call ===');
+      console.log('Receiver ID:', receiverId);
+      console.log('Current user:', user);
       
-      const { data: callData } = await startCall({
+      if (!receiverId) {
+        throw new Error('Receiver ID is required');
+      }
+      
+      if (!user?.id) {
+        throw new Error('You must be logged in to make a call');
+      }
+      
+      if (receiverId === user.id) {
+        throw new Error('You cannot call yourself');
+      }
+      
+      setCallStatus('initiating');
+      setError(null);
+      
+      console.log('Calling startCall mutation...');
+      
+      const result = await startCall({
         variables: {
           input: {
             receiverId: receiverId
           }
-        }
+        },
+        errorPolicy: 'all'
       });
       
-      if (callData?.startCall?.call) {
-        console.log('Call created successfully:', callData.startCall.call.id);
-        // Redirect to the actual call page with the call ID
-        router.replace(`/call/${callData.startCall.call.id}`);
+      console.log('StartCall result:', result);
+      
+      if (result.errors && result.errors.length > 0) {
+        console.error('GraphQL errors:', result.errors);
+        throw new Error(result.errors[0].message);
       }
+      
+      if (!result.data?.startCall?.call) {
+        throw new Error('Call could not be created');
+      }
+      
+      const newCall = result.data.startCall.call;
+      console.log('Call created successfully:', newCall.id);
+      
+      // Set the actual call ID and switch to existing call mode
+      setActualCallId(newCall.id);
+      setIsNewCall(false);
+      setCallStatus('calling');
+      
+      // Update URL without reload
+      window.history.replaceState(null, '', `/pages/calls/${newCall.id}`);
+      
     } catch (err) {
-      console.error('Error starting call:', err);
-      setError('Failed to start call. Please try again.');
+      console.error('=== Error starting call ===', err);
+      
+      let errorMessage = 'Failed to start call';
+      if (err instanceof Error) {
+        if (err.message.includes('Receiver not found')) {
+          errorMessage = 'The user you are trying to call was not found';
+        } else if (err.message.includes('Cannot call yourself')) {
+          errorMessage = 'You cannot call yourself';
+        } else if (err.message.includes('already exists')) {
+          errorMessage = 'There is already an ongoing call with this user';
+        } else if (err.message.includes('logged in')) {
+          errorMessage = 'You must be logged in to make a call';
+        } else if (err.message) {
+          errorMessage = err.message;
+        }
+      }
+      
+      setError(errorMessage);
       setCallStatus('error');
     }
   };
   
-  // Initialize WebRTC - only for existing calls, not new ones
+  // Initialize WebRTC - only for existing calls
   useEffect(() => {
-    if (!receiverId || !user || isInitialized || isNewCall) return;
+    if (!actualCallId || !user || isInitialized || isNewCall) return;
     
-    console.log('Initializing WebRTC for call:', receiverId, 'user:', user.id);
+    console.log('Initializing WebRTC for call:', actualCallId, 'user:', user.id);
     
     const initWebRTC = async () => {
       try {
         setCallStatus('initializing');
         
-        // Get user media with better constraints
         const stream = await navigator.mediaDevices.getUserMedia({ 
           audio: {
             echoCancellation: true,
@@ -126,17 +204,14 @@ export default function CallPage() {
           localVideoRef.current.srcObject = stream;
         }
         
-        // Create peer connection with enhanced config
         const pc = new RTCPeerConnection(rtcConfiguration);
         setPeerConnection(pc);
         
-        // Add local stream to connection
         stream.getTracks().forEach(track => {
           console.log('Adding track to peer connection:', track.kind);
           pc.addTrack(track, stream);
         });
         
-        // Handle remote stream
         pc.ontrack = (event) => {
           console.log('Received remote track:', event.track.kind);
           const remoteStream = new MediaStream();
@@ -149,14 +224,13 @@ export default function CallPage() {
           }
         };
         
-        // Handle ICE candidates
         pc.onicecandidate = (event) => {
           if (event.candidate) {
             console.log('Generated ICE candidate:', event.candidate.type);
             addIceCandidate({
               variables: {
                 input: {
-                  callId: receiverId,
+                  callId: actualCallId,
                   candidate: JSON.stringify(event.candidate)
                 }
               }
@@ -164,7 +238,6 @@ export default function CallPage() {
           }
         };
         
-        // Handle connection state changes
         pc.onconnectionstatechange = () => {
           console.log('Connection state changed:', pc.connectionState);
           if (pc.connectionState === 'connected') {
@@ -175,7 +248,6 @@ export default function CallPage() {
           }
         };
 
-        // Handle ICE connection state
         pc.oniceconnectionstatechange = () => {
           console.log('ICE connection state:', pc.iceConnectionState);
           if (pc.iceConnectionState === 'failed') {
@@ -187,7 +259,6 @@ export default function CallPage() {
         setIsInitialized(true);
         setCallStatus('initialized');
         
-        // Wait for call data to be available
         if (data?.getCall) {
           await handleCallData(pc);
         }
@@ -213,7 +284,7 @@ export default function CallPage() {
         peerConnection.close();
       }
     };
-  }, [receiverId, user, isInitialized, isNewCall, data]);
+  }, [actualCallId, user, isInitialized, isNewCall, data]);
 
   // Handle call data when available
   const handleCallData = async (pc: RTCPeerConnection) => {
@@ -225,7 +296,6 @@ export default function CallPage() {
     console.log('Handling call data. Is caller:', isCaller, 'Call status:', call.status);
     
     if (isCaller && call.status === 'INITIATED') {
-      // Caller creates offer
       try {
         console.log('Creating offer...');
         const offer = await pc.createOffer({
@@ -235,8 +305,6 @@ export default function CallPage() {
         await pc.setLocalDescription(offer);
         console.log('Offer created and set as local description');
         
-        // TODO: Send offer through your signaling mechanism
-        // You might need to add a mutation to send the SDP offer
         setCallStatus('calling');
       } catch (err) {
         console.error('Error creating offer:', err);
@@ -247,7 +315,7 @@ export default function CallPage() {
     }
   };
 
-  // Effect to handle call data updates - only for existing calls
+  // Effect to handle call data updates
   useEffect(() => {
     if (data?.getCall && peerConnection && isInitialized && !isNewCall) {
       handleCallData(peerConnection);
@@ -256,7 +324,7 @@ export default function CallPage() {
   
   // Subscriptions - only for existing calls
   useSubscription(ICE_CANDIDATE_SUBSCRIPTION, {
-    variables: { callId: receiverId },
+    variables: { callId: actualCallId },
     onData: ({ data }) => {
       if (data.data?.iceCandidateReceived && peerConnection) {
         try {
@@ -268,77 +336,77 @@ export default function CallPage() {
         }
       }
     },
-    skip: !receiverId || !peerConnection || isNewCall
+    skip: !actualCallId || !peerConnection || isNewCall
   });
   
   useSubscription(CALL_ANSWERED_SUBSCRIPTION, {
-    variables: { callId: receiverId },
+    variables: { callId: actualCallId },
     onData: ({ data }) => {
       if (data.data?.callAnswered) {
         console.log('Call answered');
         setCallStatus('connected');
       }
     },
-    skip: !receiverId || isNewCall
+    skip: !actualCallId || isNewCall
   });
   
   useSubscription(CALL_ENDED_SUBSCRIPTION, {
-    variables: { callId: receiverId },
+    variables: { callId: actualCallId },
     onData: ({ data }) => {
       if (data.data?.callEnded) {
         console.log('Call ended remotely');
         handleEndCall();
       }
     },
-    skip: !receiverId || isNewCall
+    skip: !actualCallId || isNewCall
   });
   
- const handleAnswerCall = async () => {
-  try {
-    if (!peerConnection) {
-      console.error('No peer connection available');
-      setError('Call connection not ready yet. Please wait...');
-      return;
-    }
-    
-    if (callStatus !== 'ringing') {
-      console.error('Call is not in ringing state');
-      return;
-    }
-    
-    console.log('Answering call...');
-    setCallStatus('answering');
-    
-    const answer = await peerConnection.createAnswer();
-    await peerConnection.setLocalDescription(answer);
-    
-    await answerCall({
-      variables: {
-        input: {
-          callId: receiverId,
-          sdpAnswer: JSON.stringify(answer)
-        }
+  const handleAnswerCall = async () => {
+    try {
+      if (!peerConnection) {
+        console.error('No peer connection available');
+        setError('Call connection not ready yet. Please wait...');
+        return;
       }
-    });
+      
+      if (callStatus !== 'ringing') {
+        console.error('Call is not in ringing state');
+        return;
+      }
+      
+      console.log('Answering call...');
+      setCallStatus('answering');
+      
+      const answer = await peerConnection.createAnswer();
+      await peerConnection.setLocalDescription(answer);
+      
+      await answerCall({
+        variables: {
+          input: {
+            callId: actualCallId,
+            sdpAnswer: JSON.stringify(answer)
+          }
+        }
+      });
+      
+      console.log('Call answered successfully');
+      setCallStatus('connected');
+    } catch (err) {
+      console.error('Error answering call:', err);
+      setError('Failed to answer call');
+      setCallStatus('error');
+    }
+  };
     
-    console.log('Call answered successfully');
-    setCallStatus('connected');
-  } catch (err) {
-    console.error('Error answering call:', err);
-    setError('Failed to answer call');
-    setCallStatus('error');
-  }
-};
-  
   const handleEndCall = async () => {
     try {
       console.log('Ending call...');
       
-      if (receiverId && !isNewCall) {
+      if (actualCallId && !isNewCall) {
         await endCall({
           variables: {
             input: {
-              callId: receiverId
+              callId: actualCallId
             }
           }
         });
@@ -362,12 +430,11 @@ export default function CallPage() {
     }
   };
 
-  // Add retry mechanism for failed calls
   const handleRetry = () => {
     setError(null);
     setIsInitialized(false);
     setCallStatus('connecting');
-    if (!isNewCall) {
+    if (!isNewCall && actualCallId) {
       refetch();
     }
   };
