@@ -11,7 +11,8 @@ import {
 } from "../graphql/query/call-queries";
 
 export const useCall = (userId: string) => {
-  const [webRTC] = useState(() => new WebRTCService());
+  // Use useRef to persist WebRTC service instance across re-renders
+  const webRTCRef = useRef<WebRTCService | null>(null);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -20,12 +21,28 @@ export const useCall = (userId: string) => {
   >("idle");
   const [currentCallId, setCurrentCallId] = useState<string | null>(null);
 
+  // Add flags to prevent multiple simultaneous operations
+  const isCallingRef = useRef<boolean>(false);
+  const isAnsweringRef = useRef<boolean>(false);
+  const cleanupInProgressRef = useRef<boolean>(false);
+
+  // Initialize WebRTC service only once
+  const getWebRTCService = useCallback(() => {
+    if (!webRTCRef.current) {
+      console.log("Creating new WebRTC service instance");
+      webRTCRef.current = new WebRTCService();
+    }
+    return webRTCRef.current;
+  }, []);
+
   // GraphQL mutations
   const [startCall] = useMutation(START_CALL, {
     errorPolicy: "all",
     onError: (error) => {
       console.error("Start call mutation error:", error);
       setError(`Failed to start call: ${error.message}`);
+      isCallingRef.current = false;
+      setCallStatus("idle");
     },
   });
 
@@ -34,6 +51,8 @@ export const useCall = (userId: string) => {
     onError: (error) => {
       console.error("Answer call mutation error:", error);
       setError(`Failed to answer call: ${error.message}`);
+      isAnsweringRef.current = false;
+      setCallStatus("idle");
     },
   });
 
@@ -45,9 +64,50 @@ export const useCall = (userId: string) => {
     },
   });
 
-  // Initialize WebRTC service
+  // Clean up function
+  const performCleanup = useCallback(() => {
+    if (cleanupInProgressRef.current) return;
+
+    console.log("Performing cleanup...");
+    cleanupInProgressRef.current = true;
+
+    try {
+      // Reset flags
+      isCallingRef.current = false;
+      isAnsweringRef.current = false;
+
+      // Reset state
+      setLocalStream(null);
+      setRemoteStream(null);
+      setCallStatus("idle");
+      setCurrentCallId(null);
+      setError(null);
+
+      // Cleanup WebRTC service
+      const webRTC = webRTCRef.current;
+      if (webRTC) {
+        webRTC.cleanup();
+        // Don't set to null here, let it be recreated when needed
+      }
+    } finally {
+      cleanupInProgressRef.current = false;
+    }
+  }, []);
+
+  // Initialize WebRTC service with callbacks
   const initializeWebRTC = useCallback(async () => {
     try {
+      const webRTC = getWebRTCService();
+
+      // Force cleanup and reinitialize if needed
+      if (
+        webRTC.getConnectionState() !== "new" &&
+        webRTC.getConnectionState() !== null
+      ) {
+        console.log("Cleaning up existing connection before initializing");
+        webRTC.cleanup();
+      }
+
       const stream = await webRTC.initializeLocalStream();
       setLocalStream(stream);
 
@@ -61,26 +121,26 @@ export const useCall = (userId: string) => {
         switch (state) {
           case "connected":
             setCallStatus("connected");
-            setError(null); // Clear any previous errors
+            setError(null);
+            isCallingRef.current = false;
+            isAnsweringRef.current = false;
             break;
           case "failed":
-            setError("Connection failed");
-            setCallStatus("idle");
-            break;
           case "disconnected":
-            setError("Connection lost");
-            setCallStatus("idle");
+            setError(
+              state === "failed" ? "Connection failed" : "Connection lost"
+            );
+            performCleanup();
             break;
           case "closed":
-            setCallStatus("idle");
+            performCleanup();
             break;
         }
       });
 
       webRTC.onIceCandidate(async (candidate) => {
-        if (currentCallId) {
+        if (currentCallId && !cleanupInProgressRef.current) {
           try {
-            // Create minimal ICE candidate object
             const minimalCandidate = {
               candidate: candidate.candidate,
               sdpMid: candidate.sdpMid,
@@ -97,33 +157,58 @@ export const useCall = (userId: string) => {
             });
           } catch (err) {
             console.error("Error sending ICE candidate:", err);
-            // Don't break the call for ICE candidate failures
           }
         }
       });
     } catch (err) {
       console.error("WebRTC initialization error:", err);
       setError("Failed to access camera/microphone");
+      performCleanup();
       throw err;
     }
-  }, [currentCallId, addIceCandidate]);
+  }, [currentCallId, addIceCandidate, getWebRTCService, performCleanup]);
 
   // Start a new call
   const makeCall = async (receiverId: string) => {
     try {
+      // Prevent multiple simultaneous calls
+      if (isCallingRef.current || isAnsweringRef.current) {
+        console.warn("Call operation already in progress");
+        return;
+      }
+
+      // Check if we're already in a call
+      if (callStatus !== "idle") {
+        console.warn(`Cannot start call while in state: ${callStatus}`);
+        setError("Already in a call or call in progress");
+        return;
+      }
+
+      // Clean up any existing state first
+      performCleanup();
+
+      // Small delay to ensure cleanup is complete
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      isCallingRef.current = true;
       setError(null);
       setCallStatus("calling");
 
       await initializeWebRTC();
+      const webRTC = getWebRTCService();
+
+      // Add extra validation
+      const connectionState = webRTC.getConnectionState();
+      console.log("Connection state before creating offer:", connectionState);
+
       const offer = await webRTC.createOffer();
 
       if (!offer || !offer.sdp) {
         throw new Error("Failed to create offer");
       }
 
-      console.log("Offer created, SDP length:", offer.sdp.length);
+      console.log("Offer created successfully");
 
-      // Create minimal offer object
       const minimalOffer = {
         type: offer.type,
         sdp: offer.sdp,
@@ -147,10 +232,12 @@ export const useCall = (userId: string) => {
       }
     } catch (err: any) {
       console.error("Error starting call:", err);
-      setCallStatus("idle");
+      performCleanup();
 
       // Handle specific error types
-      if (
+      if (err.message?.includes("signaling state")) {
+        setError("Connection error. Please wait a moment and try again.");
+      } else if (
         err.message?.includes("413") ||
         err.message?.includes("Payload Too Large")
       ) {
@@ -166,10 +253,34 @@ export const useCall = (userId: string) => {
   // Handle incoming call
   const handleIncomingCall = async (callId: string, sdpOffer: string) => {
     try {
+      // Prevent multiple simultaneous operations
+      if (isCallingRef.current || isAnsweringRef.current) {
+        console.warn("Cannot handle incoming call - operation in progress");
+        return;
+      }
+
+      // Check if we're already in a call
+      if (callStatus !== "idle") {
+        console.warn(
+          `Cannot handle incoming call while in state: ${callStatus}`
+        );
+        setError("Already in a call");
+        return;
+      }
+
+      isAnsweringRef.current = true;
       setError(null);
       console.log("Handling incoming call:", callId);
 
+      // Clean up any existing state first
+      performCleanup();
+
+      // Small delay to ensure cleanup is complete
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
       await initializeWebRTC();
+      const webRTC = getWebRTCService();
+
       setCurrentCallId(callId);
       setCallStatus("ringing");
 
@@ -179,7 +290,7 @@ export const useCall = (userId: string) => {
         throw new Error("Failed to create answer");
       }
 
-      console.log("Answer created, SDP length:", answer.sdp.length);
+      console.log("Answer created successfully");
 
       await answerCall({
         variables: {
@@ -191,10 +302,10 @@ export const useCall = (userId: string) => {
       });
 
       console.log("Call answered successfully");
+      isAnsweringRef.current = false;
     } catch (err: any) {
       console.error("Error answering call:", err);
-      setCallStatus("idle");
-      setCurrentCallId(null);
+      performCleanup();
 
       if (
         err.message?.includes("413") ||
@@ -230,6 +341,7 @@ export const useCall = (userId: string) => {
 
   const toggleScreenShare = async () => {
     try {
+      const webRTC = getWebRTCService();
       if (!webRTC) return false;
       const isSharing = await webRTC.toggleScreenShare();
       return isSharing;
@@ -240,17 +352,20 @@ export const useCall = (userId: string) => {
     }
   };
 
-  // Subscribe to incoming calls
+  // Subscribe to incoming calls - Add error handling and retry logic
   useSubscription(CALL_INITIATED_SUBSCRIPTION, {
+    errorPolicy: "all",
     onData: ({ data }) => {
       console.log("Call initiated subscription data:", data);
       const callData = data.data?.callInitiated;
       if (callData && callData.call.receiver.id === userId) {
+        console.log("Incoming call detected for user:", userId);
         handleIncomingCall(callData.call.id, callData.sdpOffer);
       }
     },
     onError: (error) => {
       console.error("Call initiated subscription error:", error);
+      setError("Connection error with server. Please refresh the page.");
     },
   });
 
@@ -258,24 +373,29 @@ export const useCall = (userId: string) => {
   useSubscription(CALL_ANSWERED_SUBSCRIPTION, {
     variables: { callId: currentCallId },
     skip: !currentCallId,
+    errorPolicy: "all",
     onData: ({ data }) => {
       console.log("Call answered subscription data:", data);
       const answerData = data.data?.callAnswered;
-      if (answerData?.sdpAnswer) {
+      if (answerData?.sdpAnswer && !cleanupInProgressRef.current) {
+        const webRTC = getWebRTCService();
         webRTC
           .handleCallAnswered(answerData.sdpAnswer)
           .then(() => {
             setCallStatus("connected");
+            isCallingRef.current = false;
             console.log("Remote description set successfully");
           })
           .catch((err) => {
             console.error("Error setting remote description:", err);
             setError("Failed to establish connection");
+            performCleanup();
           });
       }
     },
     onError: (error) => {
       console.error("Call answered subscription error:", error);
+      setError("Failed to receive call response");
     },
   });
 
@@ -283,14 +403,15 @@ export const useCall = (userId: string) => {
   useSubscription(ICE_CANDIDATE_SUBSCRIPTION, {
     variables: { callId: currentCallId },
     skip: !currentCallId,
+    errorPolicy: "all",
     onData: ({ data }) => {
       const candidateData = data.data?.iceCandidateReceived;
-      if (candidateData) {
+      if (candidateData && !cleanupInProgressRef.current) {
         try {
+          const webRTC = getWebRTCService();
           webRTC.addIceCandidate(JSON.parse(candidateData.candidate));
         } catch (err) {
           console.error("Error adding received ICE candidate:", err);
-          // Don't break the call for ICE candidate failures
         }
       }
     },
@@ -302,20 +423,23 @@ export const useCall = (userId: string) => {
   const endCall = async () => {
     try {
       console.log("Ending call:", currentCallId);
-
-      // Reset all state
-      setLocalStream(null);
-      setRemoteStream(null);
-      setCallStatus("idle");
-      setCurrentCallId(null);
-      setError(null);
-
+      performCleanup();
       // TODO: Add mutation to notify server about call end
-      // await endCallMutation({ variables: { callId: currentCallId } });
     } catch (err) {
       console.error("Error ending call:", err);
     }
   };
+
+  // Cleanup effect for component unmount
+  useEffect(() => {
+    return () => {
+      console.log("useCall cleanup effect running");
+      performCleanup();
+      if (webRTCRef.current) {
+        webRTCRef.current = null;
+      }
+    };
+  }, [performCleanup]);
 
   return {
     localStream,
