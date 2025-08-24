@@ -56,7 +56,7 @@ export const CALL_ANSWERED_SUBSCRIPTION = gql`
         id
         status
       }
-      sdpAnswer
+      sdpOffer
       iceCandidate
     }
   }
@@ -80,7 +80,7 @@ export const ANSWER_CALL = gql`
         id
         status
       }
-      sdpAnswer
+      sdpOffer
       iceCandidate
     }
   }
